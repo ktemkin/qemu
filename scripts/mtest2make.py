@@ -75,18 +75,18 @@ def process_tests(test, targets, suites):
     print('run-test-%d: $(.test.deps.%d)' % (i,i))
     print('\t@$(call .test.run,%d,$(.test.output-format))' % (i,))
 
-    test_suites = test['suite'] or ['default']
-    is_slow = any(s.endswith('-slow') for s in test_suites)
-    for s in test_suites:
-        # The suite name in the introspection info is "PROJECT:SUITE"
-        s = s.split(':')[1]
-        if s.endswith('-slow'):
-            s = s[:-5]
-        if is_slow:
-            suites[s].slow_tests.append(i)
-        else:
-            suites[s].tests.append(i)
-        suites[s].executables.add(executable)
+    #test_suites = test['suite'] or ['default']
+    #is_slow = any(s.endswith('-slow') for s in test_suites)
+    #for s in test_suites:
+    #    # The suite name in the introspection info is "PROJECT:SUITE"
+    #    s = s.split(':')[1]
+    #    if s.endswith('-slow'):
+    #        s = s[:-5]
+    #    if is_slow:
+    #        suites[s].slow_tests.append(i)
+    #    else:
+    #        suites[s].tests.append(i)
+    #    suites[s].executables.add(executable)
 
 def emit_prolog(suites, prefix):
     all_tap = ' '.join(('%s-report-%s.tap' % (prefix, k) for k in suites.keys()))
