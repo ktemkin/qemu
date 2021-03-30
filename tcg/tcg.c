@@ -162,7 +162,7 @@ TCGv_env cpu_env = 0;
 const void *tcg_code_gen_epilogue;
 uintptr_t tcg_splitwx_diff;
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 tcg_prologue_fn *tcg_qemu_tb_exec;
 #endif
 
@@ -450,18 +450,14 @@ static const TCGTargetOpDef constraint_sets[] = {
 #define C_O2_I3(O1, O2, I1, I2, I3)     C_PFX5(c_o2_i3_, O1, O2, I1, I2, I3)
 #define C_O2_I4(O1, O2, I1, I2, I3, I4) C_PFX6(c_o2_i4_, O1, O2, I1, I2, I3, I4)
 
-//
-// Gadgets for TCTI.
-//
-
-// TODO: conditionally guard this
-// FIXME: use the right path for this
-#include "aarch64/tcti-gadgets.c.inc"
-
 
 //
 // <start tcg-target.c.inc>
 //
+
+// Grab our gadget definitions.
+// FIXME: use the system path instead of hardcoding this?
+#include "tcti/aarch64/tcti-gadgets.c.inc"
 
 /* Marker for missing code. */
 #define TODO() \
@@ -703,7 +699,7 @@ void tci_disas(uint8_t opc)
 #endif
 
 /* Write value (native size). */
-static void tcg_out_i(TCGContext *s, tcg_target_ulong v)
+static void tcg_out_immediate(TCGContext *s, tcg_target_ulong v)
 {
     if (TCG_TARGET_REG_BITS == 32) {
         tcg_out32(s, v);
@@ -712,393 +708,583 @@ static void tcg_out_i(TCGContext *s, tcg_target_ulong v)
     }
 }
 
-/* Write opcode. */
-static void tcg_out_op_t(TCGContext *s, TCGOpcode op)
+
+/* Write gadget pointer. */
+static void tcg_out_nullary_gadget(TCGContext *s, void *gadget)
 {
-    tcg_out8(s, op);
-    tcg_out8(s, 0);
+    tcg_out_immediate(s, (tcg_target_ulong)gadget);
 }
 
-/* Write register. */
-static void tcg_out_r(TCGContext *s, TCGArg t0)
+/* Write gadget pointer, plus 64b immediate. */
+static void tcg_out_imm64_gadget(TCGContext *s, void *gadget, tcg_target_ulong immediate)
 {
-    tcg_debug_assert(t0 < TCG_TARGET_NB_REGS);
-    tcg_out8(s, t0);
+    tcg_out_immediate(s, (tcg_target_ulong)gadget);
+    tcg_out_immediate(s, immediate);
 }
 
-/* Write label. */
-static void tci_out_label(TCGContext *s, TCGLabel *label)
+
+/* Write gadget pointer (one register). */
+static void tcg_out_unary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS], unsigned reg0)
 {
-    if (label->has_value) {
-        tcg_out_i(s, label->u.value);
-        tcg_debug_assert(label->u.value);
-    } else {
-        tcg_out_reloc(s, s->code_ptr, sizeof(tcg_target_ulong), label, 0);
-        s->code_ptr += sizeof(tcg_target_ulong);
-    }
+    tcg_out_nullary_gadget(s, gadget_base[reg0]);
 }
 
-static void stack_bounds_check(TCGReg base, target_long offset)
+
+/* Write gadget pointer (two registers). */
+static void tcg_out_binary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1)
 {
-    if (base == TCG_REG_CALL_STACK) {
-        tcg_debug_assert(offset < 0);
-        tcg_debug_assert(offset >= -(CPU_TEMP_BUF_NLONGS * sizeof(long)));
-    }
+    tcg_out_nullary_gadget(s, gadget_base[reg0][reg1]);
 }
 
-static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
-                       intptr_t arg2)
-{
-    uint8_t *old_code_ptr = s->code_ptr;
 
-    stack_bounds_check(arg1, arg2);
-    if (type == TCG_TYPE_I32) {
-        tcg_out_op_t(s, INDEX_op_ld_i32);
-        tcg_out_r(s, ret);
-        tcg_out_r(s, arg1);
-        tcg_out32(s, arg2);
-    } else {
-        tcg_debug_assert(type == TCG_TYPE_I64);
-#if TCG_TARGET_REG_BITS == 64
-        tcg_out_op_t(s, INDEX_op_ld_i64);
-        tcg_out_r(s, ret);
-        tcg_out_r(s, arg1);
-        tcg_debug_assert(arg2 == (int32_t)arg2);
-        tcg_out32(s, arg2);
-#else
-        TODO();
-#endif
-    }
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
+/* Write gadget pointer (three registers). */
+static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
+
+{
+    tcg_out_nullary_gadget(s, gadget_base[reg0][reg1][reg2]);
 }
 
+
+/* Write gadget pointer (two registers). */
+static void tcg_out_ldst_gadget(TCGContext *s, void * gadget_base[16][16], unsigned reg0, unsigned reg1, uint32_t offset)
+{
+    tcg_out_binary_gadget(s, gadget_base, reg0, reg1);
+    tcg_out32(s, offset);
+}
+
+
+/**
+ * Gadget that breaks out of a translation block and back into QEMU code.
+ */
+__attribute__((naked)) static void gadget_exit_tb(void)
+{
+    // We started by calling into a TB. We're now ready to return.
+    asm("ret");
+}
+
+/**
+ * Generate a register-to-register MOV.
+ */
 static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
 {
-    uint8_t *old_code_ptr = s->code_ptr;
     tcg_debug_assert(ret != arg);
-#if TCG_TARGET_REG_BITS == 32
-    tcg_out_op_t(s, INDEX_op_mov_i32);
-#else
-    tcg_out_op_t(s, INDEX_op_mov_i64);
-#endif
-    tcg_out_r(s, ret);
-    tcg_out_r(s, arg);
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
+    tcg_out_binary_gadget(s, gadget_mov_i64, ret, arg);
     return true;
 }
 
+/**
+ * Generate an immediate-to-register MOV.
+ */
 static void tcg_out_movi(TCGContext *s, TCGType type,
                          TCGReg t0, tcg_target_long arg)
 {
-    uint8_t *old_code_ptr = s->code_ptr;
     uint32_t arg32 = arg;
     if (type == TCG_TYPE_I32 || arg == arg32) {
-        tcg_out_op_t(s, INDEX_op_tci_movi_i32);
-        tcg_out_r(s, t0);
-        tcg_out32(s, arg32);
+        // Emit the mov and its immediate.
+        tcg_out_unary_gadget(s, gadget_tci_movi_i32, t0);
+        tcg_out32(s, arg);
     } else {
-        tcg_debug_assert(type == TCG_TYPE_I64);
-#if TCG_TARGET_REG_BITS == 64
-        tcg_out_op_t(s, INDEX_op_tci_movi_i64);
-        tcg_out_r(s, t0);
+        // Emit the mov and its immediate.
+        tcg_out_unary_gadget(s, gadget_tci_movi_i64, t0);
         tcg_out64(s, arg);
-#else
-        TODO();
-#endif
     }
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
 }
 
+/**
+ * Generate a CALL.
+ */
 static inline void tcg_out_call(TCGContext *s, const tcg_insn_unit *arg)
 {
-    uint8_t *old_code_ptr = s->code_ptr;
-    tcg_out_op_t(s, INDEX_op_call);
-    tcg_out_i(s, (uintptr_t)arg);
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
+    tcg_out_nullary_gadget(s, gadget_call);
+    tcg_out_immediate(s, (uintptr_t)arg);
 }
 
+/**
+ * Generates LD instructions.
+ */
+static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
+                       intptr_t arg2)
+{
+
+    if (type == TCG_TYPE_I32) {
+        tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2); 
+    } else {
+        tcg_out_ldst_gadget(s, gadget_ld_i64, ret, arg1, arg2); 
+    }
+}
+
+
+
+/**
+ * Generate every other operation.
+ */
 static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
                        const int *const_args)
 {
-    uint8_t *old_code_ptr = s->code_ptr;
-
-    tcg_out_op_t(s, opc);
-
     switch (opc) {
+
+    // Exit translation, and return back to QEMU.
     case INDEX_op_exit_tb:
-        tcg_out64(s, args[0]);
+        tcg_out_nullary_gadget(s, gadget_exit_tb);
         break;
+
+    // Jump to a translation block.
     case INDEX_op_goto_tb:
+
+        // If we're using a direct jump, we'll emit a "relocation" that can be usd
+        // to patch our gadget stream with the target address, later.
         if (s->tb_jmp_insn_offset) {
-            /* Direct jump method. */
-            /* Align for atomic patching and thread safety */
-            s->code_ptr = QEMU_ALIGN_PTR_UP(s->code_ptr, 4);
+
+            // Place our current instruction into our "relocation table", so it can
+            // be patched once we know where the branch will target...
             s->tb_jmp_insn_offset[args[0]] = tcg_current_code_size(s);
-            tcg_out32(s, 0);
+
+            // ... and emit our relocation.
+            tcg_out_imm64_gadget(s, gadget_br, 0);
+
         } else {
             /* Indirect jump method. */
             TODO();
         }
         set_jmp_reset_offset(s, args[0]);
         break;
+
+    // Simple branch.
     case INDEX_op_br:
-        tci_out_label(s, arg_label(args[0]));
-        break;
-    case INDEX_op_setcond_i32:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out8(s, args[3]);   /* condition */
-        break;
-#if TCG_TARGET_REG_BITS == 32
-    case INDEX_op_setcond2_i32:
-        /* setcond2_i32 cond, t0, t1_low, t1_high, t2_low, t2_high */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out_r(s, args[3]);
-        tcg_out_r(s, args[4]);
-        tcg_out8(s, args[5]);   /* condition */
-        break;
-#elif TCG_TARGET_REG_BITS == 64
-    case INDEX_op_setcond_i64:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out8(s, args[3]);   /* condition */
-        break;
-#endif
-    case INDEX_op_ld8u_i32:
-    case INDEX_op_ld8s_i32:
-    case INDEX_op_ld16u_i32:
-    case INDEX_op_ld16s_i32:
-    case INDEX_op_ld_i32:
-    case INDEX_op_st8_i32:
-    case INDEX_op_st16_i32:
-    case INDEX_op_st_i32:
-    case INDEX_op_ld8u_i64:
-    case INDEX_op_ld8s_i64:
-    case INDEX_op_ld16u_i64:
-    case INDEX_op_ld16s_i64:
-    case INDEX_op_ld32u_i64:
-    case INDEX_op_ld32s_i64:
-    case INDEX_op_ld_i64:
-    case INDEX_op_st8_i64:
-    case INDEX_op_st16_i64:
-    case INDEX_op_st32_i64:
-    case INDEX_op_st_i64:
-        stack_bounds_check(args[1], args[2]);
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_debug_assert(args[2] == (int32_t)args[2]);
-        tcg_out32(s, args[2]);
-        break;
-    case INDEX_op_add_i32:
-    case INDEX_op_sub_i32:
-    case INDEX_op_mul_i32:
-    case INDEX_op_and_i32:
-    case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
-    case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_eqv_i32). */
-    case INDEX_op_nand_i32:     /* Optional (TCG_TARGET_HAS_nand_i32). */
-    case INDEX_op_nor_i32:      /* Optional (TCG_TARGET_HAS_nor_i32). */
-    case INDEX_op_or_i32:
-    case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i32). */
-    case INDEX_op_xor_i32:
-    case INDEX_op_shl_i32:
-    case INDEX_op_shr_i32:
-    case INDEX_op_sar_i32:
-    case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-    case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        break;
-    case INDEX_op_deposit_i32:  /* Optional (TCG_TARGET_HAS_deposit_i32). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_debug_assert(args[3] <= UINT8_MAX);
-        tcg_out8(s, args[3]);
-        tcg_debug_assert(args[4] <= UINT8_MAX);
-        tcg_out8(s, args[4]);
+        tcg_out_imm64_gadget(s, gadget_br, args[0]);
         break;
 
-#if TCG_TARGET_REG_BITS == 64
+
+    // Set condition flag.
+    // a0 = Rd, a1 = Rn, a2 = Rm
+    case INDEX_op_setcond_i32:
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per condition; we'll select which.
+        switch(args[3]) {
+            case TCG_COND_EQ:  gadget = gadget_setcond_i32_eq; break;
+            case TCG_COND_NE:  gadget = gadget_setcond_i32_ne; break;
+            case TCG_COND_LT:  gadget = gadget_setcond_i32_lt; break;
+            case TCG_COND_GE:  gadget = gadget_setcond_i32_ge; break;
+            case TCG_COND_LE:  gadget = gadget_setcond_i32_le; break;
+            case TCG_COND_GT:  gadget = gadget_setcond_i32_gt; break;
+            case TCG_COND_LTU: gadget = gadget_setcond_i32_lo; break;
+            case TCG_COND_GEU: gadget = gadget_setcond_i32_pl; break;
+            case TCG_COND_LEU: gadget = gadget_setcond_i32_ls; break;
+            case TCG_COND_GTU: gadget = gadget_setcond_i32_hi; break;
+            default:
+                g_assert_not_reached();
+        }
+
+        tcg_out_ternary_gadget(s, gadget, args[0], args[1], args[2]);
+        break;
+    }
+
+    case INDEX_op_setcond_i64:
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per condition; we'll select which.
+        switch(args[3]) {
+            case TCG_COND_EQ:  gadget = gadget_setcond_i64_eq; break;
+            case TCG_COND_NE:  gadget = gadget_setcond_i64_ne; break;
+            case TCG_COND_LT:  gadget = gadget_setcond_i64_lt; break;
+            case TCG_COND_GE:  gadget = gadget_setcond_i64_ge; break;
+            case TCG_COND_LE:  gadget = gadget_setcond_i64_le; break;
+            case TCG_COND_GT:  gadget = gadget_setcond_i64_gt; break;
+            case TCG_COND_LTU: gadget = gadget_setcond_i64_lo; break;
+            case TCG_COND_GEU: gadget = gadget_setcond_i64_pl; break;
+            case TCG_COND_LEU: gadget = gadget_setcond_i64_ls; break;
+            case TCG_COND_GTU: gadget = gadget_setcond_i64_hi; break;
+            default:
+                g_assert_not_reached();
+        }
+
+        tcg_out_ternary_gadget(s, gadget, args[0], args[1], args[2]);
+        break;
+    }
+
+    /**
+     * Load instructions.
+     */
+
+    case INDEX_op_ld8u_i32:
+    case INDEX_op_ld8u_i64:
+        tcg_out_ldst_gadget(s, gadget_ld8u, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_ld8s_i32:
+    case INDEX_op_ld8s_i64:
+        tcg_out_ldst_gadget(s, gadget_ld8s, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_ld16u_i32:
+    case INDEX_op_ld16u_i64:
+        tcg_out_ldst_gadget(s, gadget_ld16u, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_ld16s_i32:
+    case INDEX_op_ld16s_i64:
+        tcg_out_ldst_gadget(s, gadget_ld16s, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_ld_i32:
+    case INDEX_op_ld32u_i64:
+        tcg_out_ldst_gadget(s, gadget_ld32u, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_ld_i64:
+        tcg_out_ldst_gadget(s, gadget_ld_i64, args[0], args[1], args[2]); 
+        break;
+    
+    case INDEX_op_ld32s_i64:
+        tcg_out_ldst_gadget(s, gadget_ld32s_i64, args[0], args[1], args[2]); 
+        break;
+
+
+    /**
+     * Store instructions.
+     */
+
+
+    case INDEX_op_st8_i32:
+    case INDEX_op_st8_i64:
+        tcg_out_ldst_gadget(s, gadget_st8, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_st16_i32:
+    case INDEX_op_st16_i64:
+        tcg_out_ldst_gadget(s, gadget_st16, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_st_i32:
+    case INDEX_op_st32_i64:
+        tcg_out_ldst_gadget(s, gadget_st_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_st_i64:
+        tcg_out_ldst_gadget(s, gadget_st_i64, args[0], args[1], args[2]); 
+        break;
+
+    /**
+     * Arithmetic instructions.
+     */
+
+    case INDEX_op_add_i32: 
+        tcg_out_ternary_gadget(s, gadget_add_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_sub_i32:
+        tcg_out_ternary_gadget(s, gadget_sub_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_mul_i32:
+        tcg_out_ternary_gadget(s, gadget_mul_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_and_i32:
+        tcg_out_ternary_gadget(s, gadget_and_i32, args[0], args[1], args[2]); 
+        break;
+
+    // TODO: possibly implement these?
+    // Is it worth the extra size? Probably.
+    //case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
+    //case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_eqv_i32). */
+    //case INDEX_op_nand_i32:     /* Optional (TCG_TARGET_HAS_nand_i32). */
+    //case INDEX_op_nor_i32:      /* Optional (TCG_TARGET_HAS_nor_i32). */
+    //case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i32). */
+
+    case INDEX_op_or_i32:
+        tcg_out_ternary_gadget(s, gadget_or_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_xor_i32:
+        tcg_out_ternary_gadget(s, gadget_xor_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_shl_i32:
+        tcg_out_ternary_gadget(s, gadget_shl_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_shr_i32:
+        tcg_out_ternary_gadget(s, gadget_shr_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_sar_i32:
+        tcg_out_ternary_gadget(s, gadget_sar_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+        tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+        tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]); 
+
+
+    //case INDEX_op_deposit_i32:  /* Optional (TCG_TARGET_HAS_deposit_i32). */
+
     case INDEX_op_add_i64:
+        tcg_out_ternary_gadget(s, gadget_add_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_sub_i64:
+        tcg_out_ternary_gadget(s, gadget_sub_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_mul_i64:
+        tcg_out_ternary_gadget(s, gadget_mul_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_and_i64:
-    case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
-    case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
-    case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
-    case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
+        tcg_out_ternary_gadget(s, gadget_and_i64, args[0], args[1], args[2]); 
+        break;
+
+    //case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
+    //case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
+    //case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
+    //case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
+    //case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
+
     case INDEX_op_or_i64:
-    case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
+        tcg_out_ternary_gadget(s, gadget_or_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_xor_i64:
+        tcg_out_ternary_gadget(s, gadget_xor_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_shl_i64:
+        tcg_out_ternary_gadget(s, gadget_shl_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_shr_i64:
+        tcg_out_ternary_gadget(s, gadget_shr_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_sar_i64:
+        tcg_out_ternary_gadget(s, gadget_sar_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+        tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+        tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_div_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
+        tcg_out_ternary_gadget(s, gadget_div_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_divu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
+        tcg_out_ternary_gadget(s, gadget_divu_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_rem_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
+        tcg_out_ternary_gadget(s, gadget_rem_i64, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_remu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
+        tcg_out_ternary_gadget(s, gadget_remu_i64, args[0], args[1], args[2]); 
         break;
-    case INDEX_op_deposit_i64:  /* Optional (TCG_TARGET_HAS_deposit_i64). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_debug_assert(args[3] <= UINT8_MAX);
-        tcg_out8(s, args[3]);
-        tcg_debug_assert(args[4] <= UINT8_MAX);
-        tcg_out8(s, args[4]);
-        break;
+
+    //case INDEX_op_deposit_i64:  /* Optional (TCG_TARGET_HAS_deposit_i64). */
+
     case INDEX_op_brcond_i64:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out8(s, args[2]);           /* condition */
-        tci_out_label(s, arg_label(args[3]));
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per condition; we'll select which.
+        switch(args[2]) {
+            case TCG_COND_EQ:  gadget = gadget_brcond_i64_eq; break;
+            case TCG_COND_NE:  gadget = gadget_brcond_i64_ne; break;
+            case TCG_COND_LT:  gadget = gadget_brcond_i64_lt; break;
+            case TCG_COND_GE:  gadget = gadget_brcond_i64_ge; break;
+            case TCG_COND_LE:  gadget = gadget_brcond_i64_le; break;
+            case TCG_COND_GT:  gadget = gadget_brcond_i64_gt; break;
+            case TCG_COND_LTU: gadget = gadget_brcond_i64_lo; break;
+            case TCG_COND_GEU: gadget = gadget_brcond_i64_pl; break;
+            case TCG_COND_LEU: gadget = gadget_brcond_i64_ls; break;
+            case TCG_COND_GTU: gadget = gadget_brcond_i64_hi; break;
+            default:
+                g_assert_not_reached();
+        }
+
+        tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+
+        // Branch target immediate.
+        tcg_out_immediate(s, args[3]);
+
         break;
-    case INDEX_op_bswap16_i64:  /* Optional (TCG_TARGET_HAS_bswap16_i64). */
-    case INDEX_op_bswap32_i64:  /* Optional (TCG_TARGET_HAS_bswap32_i64). */
-    case INDEX_op_bswap64_i64:  /* Optional (TCG_TARGET_HAS_bswap64_i64). */
-    case INDEX_op_not_i64:      /* Optional (TCG_TARGET_HAS_not_i64). */
-    case INDEX_op_neg_i64:      /* Optional (TCG_TARGET_HAS_neg_i64). */
-    case INDEX_op_ext8s_i64:    /* Optional (TCG_TARGET_HAS_ext8s_i64). */
-    case INDEX_op_ext8u_i64:    /* Optional (TCG_TARGET_HAS_ext8u_i64). */
-    case INDEX_op_ext16s_i64:   /* Optional (TCG_TARGET_HAS_ext16s_i64). */
-    case INDEX_op_ext16u_i64:   /* Optional (TCG_TARGET_HAS_ext16u_i64). */
-    case INDEX_op_ext32s_i64:   /* Optional (TCG_TARGET_HAS_ext32s_i64). */
-    case INDEX_op_ext32u_i64:   /* Optional (TCG_TARGET_HAS_ext32u_i64). */
-    case INDEX_op_ext_i32_i64:
-    case INDEX_op_extu_i32_i64:
-#endif /* TCG_TARGET_REG_BITS == 64 */
-    case INDEX_op_neg_i32:      /* Optional (TCG_TARGET_HAS_neg_i32). */
-    case INDEX_op_not_i32:      /* Optional (TCG_TARGET_HAS_not_i32). */
-    case INDEX_op_ext8s_i32:    /* Optional (TCG_TARGET_HAS_ext8s_i32). */
-    case INDEX_op_ext16s_i32:   /* Optional (TCG_TARGET_HAS_ext16s_i32). */
-    case INDEX_op_ext8u_i32:    /* Optional (TCG_TARGET_HAS_ext8u_i32). */
-    case INDEX_op_ext16u_i32:   /* Optional (TCG_TARGET_HAS_ext16u_i32). */
+    }
+
+
     case INDEX_op_bswap16_i32:  /* Optional (TCG_TARGET_HAS_bswap16_i32). */
+    case INDEX_op_bswap16_i64:  /* Optional (TCG_TARGET_HAS_bswap16_i64). */
+        tcg_out_binary_gadget(s, gadget_bswap16, args[0], args[1]);
+        break;
+
     case INDEX_op_bswap32_i32:  /* Optional (TCG_TARGET_HAS_bswap32_i32). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
+    case INDEX_op_bswap32_i64:  /* Optional (TCG_TARGET_HAS_bswap32_i64). */
+        tcg_out_binary_gadget(s, gadget_bswap32, args[0], args[1]);
         break;
+
+    case INDEX_op_bswap64_i64:  /* Optional (TCG_TARGET_HAS_bswap64_i64). */
+        tcg_out_binary_gadget(s, gadget_bswap64, args[0], args[1]);
+        break;
+
+    case INDEX_op_not_i64:      /* Optional (TCG_TARGET_HAS_not_i64). */
+        tcg_out_binary_gadget(s, gadget_not_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_neg_i64:      /* Optional (TCG_TARGET_HAS_neg_i64). */
+        tcg_out_binary_gadget(s, gadget_neg_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext8s_i64:    /* Optional (TCG_TARGET_HAS_ext8s_i64). */
+        tcg_out_binary_gadget(s, gadget_ext8s_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext8u_i32:    /* Optional (TCG_TARGET_HAS_ext8u_i32). */
+    case INDEX_op_ext8u_i64:    /* Optional (TCG_TARGET_HAS_ext8u_i64). */
+        tcg_out_binary_gadget(s, gadget_ext8u, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext16s_i64:   /* Optional (TCG_TARGET_HAS_ext16s_i64). */
+        tcg_out_binary_gadget(s, gadget_ext16s_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext16u_i32:   /* Optional (TCG_TARGET_HAS_ext16u_i32). */
+    case INDEX_op_ext16u_i64:   /* Optional (TCG_TARGET_HAS_ext16u_i64). */
+        tcg_out_binary_gadget(s, gadget_ext16u, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext32s_i64:   /* Optional (TCG_TARGET_HAS_ext32s_i64). */
+    case INDEX_op_ext_i32_i64:
+        tcg_out_binary_gadget(s, gadget_ext32s_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext32u_i64:   /* Optional (TCG_TARGET_HAS_ext32u_i64). */
+    case INDEX_op_extu_i32_i64:
+        tcg_out_binary_gadget(s, gadget_ext32u_i64, args[0], args[1]);
+        break;
+
+    case INDEX_op_neg_i32:      /* Optional (TCG_TARGET_HAS_neg_i32). */
+        tcg_out_binary_gadget(s, gadget_neg_i32, args[0], args[1]);
+        break;
+
+    case INDEX_op_not_i32:      /* Optional (TCG_TARGET_HAS_not_i32). */
+        tcg_out_binary_gadget(s, gadget_not_i32, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext8s_i32:    /* Optional (TCG_TARGET_HAS_ext8s_i32). */
+        tcg_out_binary_gadget(s, gadget_ext8s_i32, args[0], args[1]);
+        break;
+
+    case INDEX_op_ext16s_i32:   /* Optional (TCG_TARGET_HAS_ext16s_i32). */
+        tcg_out_binary_gadget(s, gadget_ext16s_i32, args[0], args[1]);
+        break;
+
     case INDEX_op_div_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
+        tcg_out_ternary_gadget(s, gadget_div_i32, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_divu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
+        tcg_out_ternary_gadget(s, gadget_divu_i32, args[0], args[1], args[2]); 
+        break;
+
+
     case INDEX_op_rem_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
+        tcg_out_ternary_gadget(s, gadget_rem_i32, args[0], args[1], args[2]); 
+        break;
+
     case INDEX_op_remu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
+        tcg_out_ternary_gadget(s, gadget_remu_i32, args[0], args[1], args[2]); 
         break;
-#if TCG_TARGET_REG_BITS == 32
-    case INDEX_op_add2_i32:
-    case INDEX_op_sub2_i32:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out_r(s, args[3]);
-        tcg_out_r(s, args[4]);
-        tcg_out_r(s, args[5]);
-        break;
-    case INDEX_op_brcond2_i32:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out_r(s, args[3]);
-        tcg_out8(s, args[4]);           /* condition */
-        tci_out_label(s, arg_label(args[5]));
-        break;
-    case INDEX_op_mulu2_i32:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out_r(s, args[2]);
-        tcg_out_r(s, args[3]);
-        break;
-#endif
+
     case INDEX_op_brcond_i32:
-        tcg_out_r(s, args[0]);
-        tcg_out_r(s, args[1]);
-        tcg_out8(s, args[2]);           /* condition */
-        tci_out_label(s, arg_label(args[3]));
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per condition; we'll select which.
+        switch(args[2]) {
+            case TCG_COND_EQ:  gadget = gadget_brcond_i64_eq; break;
+            case TCG_COND_NE:  gadget = gadget_brcond_i64_ne; break;
+            case TCG_COND_LT:  gadget = gadget_brcond_i64_lt; break;
+            case TCG_COND_GE:  gadget = gadget_brcond_i64_ge; break;
+            case TCG_COND_LE:  gadget = gadget_brcond_i64_le; break;
+            case TCG_COND_GT:  gadget = gadget_brcond_i64_gt; break;
+            case TCG_COND_LTU: gadget = gadget_brcond_i64_lo; break;
+            case TCG_COND_GEU: gadget = gadget_brcond_i64_pl; break;
+            case TCG_COND_LEU: gadget = gadget_brcond_i64_ls; break;
+            case TCG_COND_GTU: gadget = gadget_brcond_i64_hi; break;
+            default:
+                g_assert_not_reached();
+        }
+
+        tcg_out_binary_gadget(s, gadget, args[0], args[1]);
+
+        // Branch target immediate.
+        tcg_out_immediate(s, args[3]);
+
         break;
+    }
+
     case INDEX_op_qemu_ld_i32:
-        tcg_out_r(s, *args++);
-        tcg_out_r(s, *args++);
-        if (TARGET_LONG_BITS > TCG_TARGET_REG_BITS) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_i(s, *args++);
+        TODO();
         break;
+
     case INDEX_op_qemu_ld_i64:
-        tcg_out_r(s, *args++);
-        if (TCG_TARGET_REG_BITS == 32) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_r(s, *args++);
-        if (TARGET_LONG_BITS > TCG_TARGET_REG_BITS) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_i(s, *args++);
+        TODO();
         break;
+
     case INDEX_op_qemu_st_i32:
-        tcg_out_r(s, *args++);
-        tcg_out_r(s, *args++);
-        if (TARGET_LONG_BITS > TCG_TARGET_REG_BITS) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_i(s, *args++);
+        TODO();
         break;
+
     case INDEX_op_qemu_st_i64:
-        tcg_out_r(s, *args++);
-        if (TCG_TARGET_REG_BITS == 32) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_r(s, *args++);
-        if (TARGET_LONG_BITS > TCG_TARGET_REG_BITS) {
-            tcg_out_r(s, *args++);
-        }
-        tcg_out_i(s, *args++);
+        TODO();
         break;
+
+
+    // Memory barriers.
     case INDEX_op_mb:
+    {
+        static const void* sync[] = {
+            [0 ... TCG_MO_ALL]            = gadget_mb_all,
+            [TCG_MO_ST_ST]                = gadget_mb_st,
+            [TCG_MO_LD_LD]                = gadget_mb_ld,
+            [TCG_MO_LD_ST]                = gadget_mb_ld,
+            [TCG_MO_LD_ST | TCG_MO_LD_LD] = gadget_mb_ld,
+        };
+        tcg_out_nullary_gadget(s, sync[args[0] & TCG_MO_ALL]);
         break;
+    }
+
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
     case INDEX_op_call:     /* Always emitted via tcg_out_call.  */
     default:
         tcg_abort();
     }
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
 }
 
+/**
+ * Generate immediate stores.
+ */
 static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
                        intptr_t arg2)
 {
-    uint8_t *old_code_ptr = s->code_ptr;
-
-    stack_bounds_check(arg1, arg2);
     if (type == TCG_TYPE_I32) {
-        tcg_out_op_t(s, INDEX_op_st_i32);
-        tcg_out_r(s, arg);
-        tcg_out_r(s, arg1);
+        tcg_out_binary_gadget(s, gadget_st_i32, arg, arg1);
         tcg_out32(s, arg2);
     } else {
-        tcg_debug_assert(type == TCG_TYPE_I64);
-#if TCG_TARGET_REG_BITS == 64
-        tcg_out_op_t(s, INDEX_op_st_i64);
-        tcg_out_r(s, arg);
-        tcg_out_r(s, arg1);
+        tcg_out_binary_gadget(s, gadget_st_i64, arg, arg1);
         tcg_out32(s, arg2);
-#else
-        TODO();
-#endif
     }
-    old_code_ptr[1] = s->code_ptr - old_code_ptr;
 }
 
 static inline bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,
@@ -1901,7 +2087,7 @@ void tcg_prologue_init(TCGContext *s)
     region.start = buf0;
     region.end = buf0 + total_size;
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     tcg_qemu_tb_exec = (tcg_prologue_fn *)tcg_splitwx_to_rx(buf0);
 #endif
 
@@ -1927,7 +2113,7 @@ void tcg_prologue_init(TCGContext *s)
 #endif
 
     buf1 = s->code_ptr;
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) || !defined(CONFIG_TCG_THREADED_INTERPRETER)
     flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(buf0), (uintptr_t)buf0,
                         tcg_ptr_byte_diff(buf1, buf0));
 #endif
@@ -2656,7 +2842,7 @@ void tcg_gen_callN(void *func, TCGTemp *ret, int nargs, TCGTemp **args)
 #endif
 
 #if defined(__sparc__) && !defined(__arch64__) \
-    && !defined(CONFIG_TCG_INTERPRETER)
+    && !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     /* We have 64-bit values in one register, but need to pass as two
        separate parameters.  Split them.  */
     int orig_sizemask = sizemask;
@@ -2706,7 +2892,7 @@ void tcg_gen_callN(void *func, TCGTemp *ret, int nargs, TCGTemp **args)
     pi = 0;
     if (ret != NULL) {
 #if defined(__sparc__) && !defined(__arch64__) \
-    && !defined(CONFIG_TCG_INTERPRETER)
+    && !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
         if (orig_sizemask & 1) {
             /* The 32-bit ABI is going to return the 64-bit value in
                the %o0/%o1 register pair.  Prepare for this by using
@@ -2784,7 +2970,7 @@ void tcg_gen_callN(void *func, TCGTemp *ret, int nargs, TCGTemp **args)
     tcg_debug_assert(pi <= ARRAY_SIZE(op->args));
 
 #if defined(__sparc__) && !defined(__arch64__) \
-    && !defined(CONFIG_TCG_INTERPRETER)
+    && !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     /* Free all of the parts we allocated above.  */
     for (i = real_args = 0; i < orig_nargs; ++i) {
         int is_64bit = orig_sizemask & (1 << (i+1)*2);
@@ -5464,7 +5650,7 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb)
         return -2;
     }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     /* flush instruction cache */
     flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
                         (uintptr_t)s->code_buf,

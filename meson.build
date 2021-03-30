@@ -246,6 +246,14 @@ if not get_option('tcg').disabled()
   endif
   if get_option('tcg_interpreter')
     tcg_arch = 'tci'
+  elif get_option('tcg_threaded_interpreter')
+    warning('TCTI is extremely experimental and incomplete! Things will break.')
+    tcg_arch = 'tcti'
+
+    # We need per-architecture gadgets for this architecture; so include that folder.
+    add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' /  'tcti' /tcg_arch,
+                        language: ['c', 'cpp', 'objc'])
+
   elif config_host['ARCH'] == 'sparc64'
     tcg_arch = 'sparc'
   elif config_host['ARCH'] == 's390x'
@@ -1280,6 +1288,8 @@ foreach target : target_dirs
       config_all += { sym: 'y' }
       if sym == 'CONFIG_TCG' and tcg_arch == 'tci'
         config_target += { 'CONFIG_TCG_INTERPRETER': 'y' }
+      elif sym == 'CONFIG_TCG' and tcg_arch == 'tcti'
+        config_target += { 'CONFIG_TCG_THREADED_INTERPRETER': 'y' }
       elif sym == 'CONFIG_XEN' and have_xen_pci_passthrough
         config_target += { 'CONFIG_XEN_PCI_PASSTHROUGH': 'y' }
       endif
@@ -1890,6 +1900,7 @@ specific_ss.add(when: 'CONFIG_TCG', if_true: files(
   'tcg/tcg.c',
 ))
 specific_ss.add(when: 'CONFIG_TCG_INTERPRETER', if_true: files('disas/tci.c', 'tcg/tci.c'))
+specific_ss.add(when: 'CONFIG_TCG_THREADED_INTERPRETER', if_true: files('disas/tcti.c', 'tcg/tcti.c'))
 
 subdir('backends')
 subdir('disas')
@@ -2539,6 +2550,8 @@ summary_info += {'TCG support':       config_all.has_key('CONFIG_TCG')}
 if config_all.has_key('CONFIG_TCG')
   if get_option('tcg_interpreter')
     summary_info += {'TCG backend':   'TCI (TCG with bytecode interpreter, experimental and slow)'}
+  elif get_option('tcg_threaded_interpreter')
+    summary_info += {'TCG backend':   'TCTI (TCG with threaded-dispatch bytecode interpreter, experimental and slow; but faster than TCI)'}
   else
     summary_info += {'TCG backend':   'native (@0@)'.format(cpu)}
   endif

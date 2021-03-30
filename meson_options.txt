@@ -43,6 +43,8 @@ option('tcg', type: 'feature', value: 'auto',
        description: 'TCG support')
 option('tcg_interpreter', type: 'boolean', value: false,
        description: 'TCG with bytecode interpreter (experimental and slow)')
+option('tcg_threaded_interpreter', type: 'boolean', value: false,
+       description: 'TCG with threaded-dispatch bytecode interpreter (experimental and slow, but less slow than TCI)')
 option('cfi', type: 'boolean', value: 'false',
        description: 'Control-Flow Integrity (CFI)')
 option('cfi_debug', type: 'boolean', value: 'false',

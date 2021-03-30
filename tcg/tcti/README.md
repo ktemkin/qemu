@@ -894,7 +894,7 @@ sxtw Xd, Wn
 
 ### ext32u_i64
 
-Sign extends the lower 32b of a register into a 64b destination.
+Zero extends the lower 32b of a register into a 64b destination.
 
 **IR Format**: `ext32s Rd, Rn`  
 **Gadget type:** gadget per `Rd`, `Rn` (256)

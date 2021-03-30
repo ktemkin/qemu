@@ -1130,7 +1130,7 @@ static bool alloc_code_gen_buffer_anon(size_t size, int prot,
     return true;
 }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 #ifdef CONFIG_POSIX
 #include "qemu/memfd.h"
 
@@ -1257,7 +1257,7 @@ static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
 
 static bool alloc_code_gen_buffer_splitwx(size_t size, Error **errp)
 {
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 # ifdef CONFIG_DARWIN
     return alloc_code_gen_buffer_splitwx_vmremap(size, errp);
 # endif
@@ -1290,7 +1290,7 @@ static bool alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
 
     prot = PROT_READ | PROT_WRITE | PROT_EXEC;
     flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef CONFIG_TCG_INTERPRETER
+#if defined(CONFIG_TCG_INTERPRETER) || defined(CONFIG_TCG_THREADED_INTERPRETER)
     /* The tcg interpreter does not need execute permission. */
     prot = PROT_READ | PROT_WRITE;
 #elif defined(CONFIG_DARWIN)
