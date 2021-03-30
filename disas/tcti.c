@@ -17,45 +17,40 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "disas/dis-asm.h"
 #include "tcg/tcg.h"
 
+#include <dlfcn.h>
+
+
 /* Disassemble TCI bytecode. */
-int print_insn_tci(bfd_vma addr, disassemble_info *info)
+int print_insn_tcti(bfd_vma addr, disassemble_info *info)
 {
-    int length;
-    uint8_t byte;
+    Dl_info symbol_info = {};
+    char symbol_name[33];
+
     int status;
-    TCGOpcode op;
+    uint64_t block;
 
-    status = info->read_memory_func(addr, &byte, 1, info);
+    // Read the relevant pointer.
+    status = info->read_memory_func(addr, (void *)&block, sizeof(block), info);
     if (status != 0) {
         info->memory_error_func(status, addr, info);
         return -1;
     }
-    op = byte;
 
-    addr++;
-    status = info->read_memory_func(addr, &byte, 1, info);
-    if (status != 0) {
-        info->memory_error_func(status, addr, info);
-        return -1;
-    }
-    length = byte;
+    // Most of our disassembly stream will be gadgets. Try to get their names, for nice output.
+    dladdr((void *)block, &symbol_info);
 
-    if (op >= tcg_op_defs_max) {
-        info->fprintf_func(info->stream, "illegal opcode %d", op);
+    if(symbol_info.dli_sname != 0) {
+        strlcpy(symbol_name, symbol_info.dli_sname, 32);
+        info->fprintf_func(info->stream, "%s (%016llx)", symbol_name, block);
     } else {
-        const TCGOpDef *def = &tcg_op_defs[op];
-        int nb_oargs = def->nb_oargs;
-        int nb_iargs = def->nb_iargs;
-        int nb_cargs = def->nb_cargs;
-        /* TODO: Improve disassembler output. */
-        info->fprintf_func(info->stream, "%s\to=%d i=%d c=%d",
-                           def->name, nb_oargs, nb_iargs, nb_cargs);
+        info->fprintf_func(info->stream, "%016llx", block);
     }
 
-    return length;
+    return sizeof(block);
 }

@@ -32,6 +32,53 @@
 # define tcti_assert(cond) ((void)0)
 #endif
 
+
+void tcti_instrumentation(void *addr, void *next);
+void tcti_instrumentation(void *addr, void *next)
+{
+    fprintf(stderr, "IP: %p, next gadget: %p\n", addr - 8, next);
+    fflush(stderr);
+}
+
+void tcti_pre_instrumentation(void);
+__attribute__((naked)) void tcti_pre_instrumentation(void)
+{
+  asm(
+    // Store our machine state.
+    "\nstp x28, lr, [sp, #-16]!"
+    "\nstp x15, x16, [sp, #-16]!"
+    "\nstp x13, x14, [sp, #-16]!"
+    "\nstp x11, x12, [sp, #-16]!"
+    "\nstp x9,  x10, [sp, #-16]!"
+    "\nstp x7,  x8, [sp, #-16]!"
+    "\nstp x5,  x6, [sp, #-16]!"
+    "\nstp x3,  x4, [sp, #-16]!"
+    "\nstp x1,  x2, [sp, #-16]!"
+    "\nstr x0,      [sp, #-16]!"
+
+    // Call our instrumentation function.
+    "\nmov x0, x28"
+    "\nmov x1, x27"
+    "\nbl _tcti_instrumentation"
+    
+    // Restore our machine state.
+    "\nldr x0,      [sp], #16"
+    "\nldp x1,  x2, [sp], #16"
+    "\nldp x3,  x4, [sp], #16"
+    "\nldp x5,  x6, [sp], #16"
+    "\nldp x7,  x8, [sp], #16"
+    "\nldp x9,  x10, [sp], #16"
+    "\nldp x11, x12, [sp], #16"
+    "\nldp x13, x14, [sp], #16"
+    "\nldp x15, x16, [sp], #16"
+    "\nldp x28, lr, [sp], #16"
+
+    //Jump to the next gadget.
+    "\nbr x27"
+  );
+}
+
+
 /* Dispatch the bytecode stream contained in our translation buffer. */
 uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
 {

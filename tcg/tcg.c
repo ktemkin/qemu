@@ -702,11 +702,59 @@ void tci_disas(uint8_t opc)
 static void tcg_out_immediate(TCGContext *s, tcg_target_ulong v)
 {
     if (TCG_TARGET_REG_BITS == 32) {
-        tcg_out32(s, v);
+        //tcg_out32(s, v);
+        tcg_out64(s, v);
     } else {
         tcg_out64(s, v);
     }
 }
+
+/**
+ * TCTI Thunk Helpers
+ */
+
+#ifdef CONFIG_SOFTMMU
+
+// TODO: relocate these prototypes?
+tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr);
+
+tcg_target_ulong helper_ret_ldub_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+{
+    return (int8_t)helper_ret_ldub_mmu(env, addr, oi, retaddr);
+}
+
+tcg_target_ulong helper_le_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+{
+    return (int16_t)helper_le_lduw_mmu(env, addr, oi, retaddr);
+}
+
+tcg_target_ulong helper_le_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+{
+    return (int32_t)helper_le_ldul_mmu(env, addr, oi, retaddr);
+}
+
+tcg_target_ulong helper_be_lduw_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+{
+    return (int16_t)helper_be_lduw_mmu(env, addr, oi, retaddr);
+}
+
+tcg_target_ulong helper_be_ldul_mmu_signed(CPUArchState *env, target_ulong addr, TCGMemOpIdx oi, uintptr_t retaddr)
+{
+    return (int32_t)helper_be_ldul_mmu(env, addr, oi, retaddr);
+}
+
+#else
+#error TCTI currently only supports use of the soft MMU.
+#endif
+
+
+/**
+ * TCTI Emmiter Helpers
+ */
 
 
 /* Write gadget pointer. */
@@ -748,9 +796,26 @@ static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_N
 /* Write gadget pointer (two registers). */
 static void tcg_out_ldst_gadget(TCGContext *s, void * gadget_base[16][16], unsigned reg0, unsigned reg1, uint32_t offset)
 {
+    int64_t extended_offset = (int32_t)offset;
+
     tcg_out_binary_gadget(s, gadget_base, reg0, reg1);
-    tcg_out32(s, offset);
+    //tcg_out32(s, offset);
+    tcg_out64(s, extended_offset);
 }
+
+
+/* Write label. */
+static void tcti_out_label(TCGContext *s, TCGLabel *label)
+{
+    if (label->has_value) {
+        tcg_out64(s, label->u.value);
+        tcg_debug_assert(label->u.value);
+    } else {
+        tcg_out_reloc(s, s->code_ptr, sizeof(tcg_target_ulong), label, 0);
+        s->code_ptr += sizeof(tcg_target_ulong);
+    }
+}
+
 
 
 /**
@@ -782,7 +847,8 @@ static void tcg_out_movi(TCGContext *s, TCGType type,
     if (type == TCG_TYPE_I32 || arg == arg32) {
         // Emit the mov and its immediate.
         tcg_out_unary_gadget(s, gadget_tci_movi_i32, t0);
-        tcg_out32(s, arg);
+        //tcg_out32(s, arg);
+        tcg_out64(s, arg);
     } else {
         // Emit the mov and its immediate.
         tcg_out_unary_gadget(s, gadget_tci_movi_i64, t0);
@@ -818,8 +884,8 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
 /**
  * Generate every other operation.
  */
-static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
-                       const int *const_args)
+//static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *const_args)
+void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *const_args)
 {
     switch (opc) {
 
@@ -1116,7 +1182,7 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
         tcg_out_binary_gadget(s, gadget, args[0], args[1]);
 
         // Branch target immediate.
-        tcg_out_immediate(s, args[3]);
+        tcti_out_label(s, arg_label(args[3]));
 
         break;
     }
@@ -1228,32 +1294,135 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args,
         tcg_out_binary_gadget(s, gadget, args[0], args[1]);
 
         // Branch target immediate.
-        tcg_out_immediate(s, args[3]);
+        tcti_out_label(s, arg_label(args[3]));
 
         break;
     }
 
     case INDEX_op_qemu_ld_i32:
-        TODO();
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per helper. Figure out which one
+        switch (get_memop(args[2]) & (MO_BSWAP | MO_SSIZE)) {
+            case MO_UB:   gadget = gadget_qemu_ld_ub_i32;   break;
+            case MO_SB:   gadget = gadget_qemu_ld_sb_i32;   break;
+            case MO_LEUW: gadget = gadget_qemu_ld_leuw_i32; break;
+            case MO_LESW: gadget = gadget_qemu_ld_lesw_i32; break;
+            case MO_LEUL: gadget = gadget_qemu_ld_leul_i32; break;
+            case MO_LESL: gadget = gadget_qemu_ld_lesl_i32; break;
+            case MO_LEQ:  gadget = gadget_qemu_ld_leq_i32;  break;
+            case MO_BEUW: gadget = gadget_qemu_ld_beuw_i32; break;
+            case MO_BESW: gadget = gadget_qemu_ld_besw_i32; break;
+            case MO_BEUL: gadget = gadget_qemu_ld_beul_i32; break;
+            case MO_BESL: gadget = gadget_qemu_ld_besl_i32; break;
+            case MO_BEQ:  gadget = gadget_qemu_ld_beq_i32;  break;
+            default:
+                g_assert_not_reached();
+        }
+
+        // Args:
+        // - our gadget encodes the destination register
+        // - an immediate64 encodes our address
+        // - an immediate32 encodes our operation index 
+        tcg_out_unary_gadget(s, gadget, args[0]);
+        tcg_out_immediate(s, args[1]);
+        tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
         break;
+    }
 
     case INDEX_op_qemu_ld_i64:
-        TODO();
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per helper. Figure out which one
+        switch (get_memop(args[2]) & (MO_BSWAP | MO_SSIZE)) {
+            case MO_UB:   gadget = gadget_qemu_ld_ub_i64;   break;
+            case MO_SB:   gadget = gadget_qemu_ld_sb_i64;   break;
+            case MO_LEUW: gadget = gadget_qemu_ld_leuw_i64; break;
+            case MO_LESW: gadget = gadget_qemu_ld_lesw_i64; break;
+            case MO_LEUL: gadget = gadget_qemu_ld_leul_i64; break;
+            case MO_LESL: gadget = gadget_qemu_ld_lesl_i64; break;
+            case MO_LEQ:  gadget = gadget_qemu_ld_leq_i64;  break;
+            case MO_BEUW: gadget = gadget_qemu_ld_beuw_i64; break;
+            case MO_BESW: gadget = gadget_qemu_ld_besw_i64; break;
+            case MO_BEUL: gadget = gadget_qemu_ld_beul_i64; break;
+            case MO_BESL: gadget = gadget_qemu_ld_besl_i64; break;
+            case MO_BEQ:  gadget = gadget_qemu_ld_beq_i64;  break;
+            default:
+                g_assert_not_reached();
+        }
+
+        // Args:
+        // - our gadget encodes the destination register
+        // - an immediate64 encodes our destination
+        // - an immediate32 encodes our operation index 
+        tcg_out_unary_gadget(s, gadget, args[0]);
+        tcg_out_immediate(s, args[1]);
+        tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
         break;
+    }
 
     case INDEX_op_qemu_st_i32:
-        TODO();
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per helper. Figure out which one
+        switch (get_memop(args[2]) & (MO_BSWAP | MO_SSIZE)) {
+            case MO_UB:   gadget = gadget_qemu_st_ub_i32;   break;
+            case MO_LEUW: gadget = gadget_qemu_st_leuw_i32; break;
+            case MO_LEUL: gadget = gadget_qemu_st_leul_i32; break;
+            case MO_LEQ:  gadget = gadget_qemu_st_leq_i32;  break;
+            case MO_BEUW: gadget = gadget_qemu_st_beuw_i32; break;
+            case MO_BEUL: gadget = gadget_qemu_st_beul_i32; break;
+            case MO_BEQ:  gadget = gadget_qemu_st_beq_i32;  break;
+            default:
+                g_assert_not_reached();
+        }
+
+        // Args:
+        // - our gadget encodes the source register
+        // - an immediate64 encodes our address
+        // - an immediate32 encodes our operation index 
+        tcg_out_unary_gadget(s, gadget, args[0]);
+        tcg_out_immediate(s, args[1]);
+        tcg_out64(s, args[2]); // FIXME: double encoded
         break;
+    }
 
     case INDEX_op_qemu_st_i64:
-        TODO();
+    {
+        void *gadget;
+
+        // We have to emit a different gadget per helper. Figure out which one
+        switch (get_memop(args[2]) & (MO_BSWAP | MO_SSIZE)) {
+            case MO_UB:   gadget = gadget_qemu_st_ub_i64;   break;
+            case MO_LEUW: gadget = gadget_qemu_st_leuw_i64; break;
+            case MO_LEUL: gadget = gadget_qemu_st_leul_i64; break;
+            case MO_LEQ:  gadget = gadget_qemu_st_leq_i64;  break;
+            case MO_BEUW: gadget = gadget_qemu_st_beuw_i64; break;
+            case MO_BEUL: gadget = gadget_qemu_st_beul_i64; break;
+            case MO_BEQ:  gadget = gadget_qemu_st_beq_i64;  break;
+            default:
+                g_assert_not_reached();
+        }
+
+        // Args:
+        // - our gadget encodes the source register
+        // - an immediate64 encodes our address
+        // - an immediate32 encodes our operation index 
+        tcg_out_unary_gadget(s, gadget, args[0]);
+        tcg_out_immediate(s, args[1]);
+        tcg_out64(s, args[2]); // FIXME: double encoded
         break;
+    }
+
 
 
     // Memory barriers.
     case INDEX_op_mb:
     {
-        static const void* sync[] = {
+        static void* sync[] = {
             [0 ... TCG_MO_ALL]            = gadget_mb_all,
             [TCG_MO_ST_ST]                = gadget_mb_st,
             [TCG_MO_LD_LD]                = gadget_mb_ld,
@@ -1280,10 +1449,12 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
 {
     if (type == TCG_TYPE_I32) {
         tcg_out_binary_gadget(s, gadget_st_i32, arg, arg1);
-        tcg_out32(s, arg2);
+        //tcg_out32(s, arg2);
+        tcg_out64(s, arg2);
     } else {
         tcg_out_binary_gadget(s, gadget_st_i64, arg, arg1);
-        tcg_out32(s, arg2);
+        //tcg_out32(s, arg2);
+        tcg_out64(s, arg2);
     }
 }
 

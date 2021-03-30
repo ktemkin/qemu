@@ -15,6 +15,14 @@ EPILOGUE = (
     "br x27"
 )
 
+# Instrumented version of our epilogue; for debug.
+#EPILOGUE = ( 
+#    # Load our next gadget address from our bytecode stream, advancing it.
+#    "ldr x27, [x28], #8",
+#    "b _tcti_pre_instrumentation"
+#)
+
+
 # The number of general-purpose registers we're affording the TCG. This must match
 # the configuration in the TCTI target.
 TCG_REGISTER_COUNT   = 16
@@ -35,7 +43,9 @@ def simple(name, *lines):
     gadgets += 1
 
     # Create our C/ASM framing.
-    print(f"__attribute__((naked)) static void gadget_{name}(void)")
+    #print(f"__attribute__((naked)) static void gadget_{name}(void)")
+    print(f"__attribute__((naked)) void gadget_{name}(void);")
+    print(f"__attribute__((naked)) void gadget_{name}(void)")
     print("{")
 
     # Add the core gadget
@@ -151,7 +161,7 @@ def immediate32_dn(name, *lines):
     
     This variant automatically loads a 32b immediate into x27.
     """
-    with_dn(name, "ldrsw x27, [x28], #4", *lines)
+    with_dn(name, "ldr x27, [x28], #8", *lines) # FIXME: encode as 4B, not 8B
 
 
 def with_single(name, substitution, lines):
@@ -171,6 +181,112 @@ def with_single(name, substitution, lines):
 def with_d(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xd. """
     with_single(name, 'd', lines)
+
+
+def with_thunk_d(name, *lines, postscript=()):
+    with_d(name,
+
+        # Store our machine state.
+        "stp x28, lr, [sp, #-16]!",
+        "stp x15, x16, [sp, #-16]!",
+        "stp x13, x14, [sp, #-16]!",
+        "stp x11, x12, [sp, #-16]!",
+        "stp x9,  x10, [sp, #-16]!",
+        "stp x7,  x8, [sp, #-16]!",
+        "stp x5,  x6, [sp, #-16]!",
+        "stp x3,  x4, [sp, #-16]!",
+        "stp x1,  x2, [sp, #-16]!",
+        "str x0,      [sp, #-16]!",
+
+        # Perform our actual core code.
+        *lines,
+        
+        # Restore our machine state.
+        "ldr x0,      [sp], #16",
+        "ldp x1,  x2, [sp], #16",
+        "ldp x3,  x4, [sp], #16",
+        "ldp x5,  x6, [sp], #16",
+        "ldp x7,  x8, [sp], #16",
+        "ldp x9,  x10, [sp], #16",
+        "ldp x11, x12, [sp], #16",
+        "ldp x13, x14, [sp], #16",
+        "ldp x15, x16, [sp], #16",
+        "ldp x28, lr, [sp], #16",
+
+        *postscript
+    )
+
+
+
+def ld_thunk(name, c_function_name):
+    """ Creates a thunk into our C runtime for a QEMU LD operation. """
+    with_thunk_d(name, 
+        # Per our calling convention:
+        # - Move our architectural environment into x0, from x14.
+        # - Move our target address into x1, from an immediate64.
+        # - Move our operation info into x2, from an immediate32.
+        # - Move the next bytecode pointer into x3, from x28.
+        "mov   x0, x14",
+        "ldr   x1, [x28], #8",
+        "ldr   x2, [x28], #8",  # FIXME: encode as 4, not 8
+        "mov   x3, x28",
+
+        # Perform our actual core code.
+        f"bl {c_function_name}",
+
+        # Finally, move our returned value into Rd.
+        "mov Rd, r0",
+        postscript=("add x28, x28, #16",)
+    )
+
+
+def ld_thunk(name, c_function_name):
+    """ Creates a thunk into our C runtime for a QEMU ST operation. """
+
+    # Build our thunk...
+    thunk = [
+        # Per our calling convention:
+        # - Move our architectural environment into x0, from x14.
+        # - Move our target address into x1, from an immediate64.
+        # - Move our operation info into x2, from an immediate32.
+        # - Move the next bytecode pointer into x3, from x28.
+        "mov   x0, x14",
+        "ldr   x1, [x28], #8",
+        "ldr   x2, [x28], #8", # FIXME: encode as 4, not 8
+        "mov   x3, x28",
+
+        # Perform our actual core code.
+        f"bl {c_function_name}",
+    ]   
+
+    # ... and instantiate it in 32 and 64 bit versions.
+    with_thunk_d(f"{name}_i32", *thunk, "mov Wd, w0", postscript=("add x28, x28, #16",))
+    with_thunk_d(f"{name}_i64", *thunk, "mov Xd, x0", postscript=("add x28, x28, #16",))
+
+
+def st_thunk(name, c_function_name):
+    """ Creates a thunk into our C runtime for a QEMU ST operation. """
+
+    # Build our thunk...
+    thunk = [
+        # Per our calling convention:
+        # - Move our architectural environment into x0, from x14.
+        # - Move our target address into x1, from an immediate64.
+        # - Move our target value into x2. [Done below]
+        # - Move our operation info into x3, from an immediate32.
+        # - Move the next bytecode pointer into x4, from x28.
+        "mov   x0, x14",
+        "ldr   x1, [x28], #8",
+        "ldr   x3, [x28], #8", # FIXME: encode as 4, not 8
+        "mov   x4, x28",
+
+        # Perform our actual core code.
+        f"bl {c_function_name}",
+    ]   
+
+    # ... and instantiate it in 32 and 64 bit versions.
+    with_thunk_d(f"{name}_i32", "mov w2, Wd", *thunk, postscript=("add x28, x28, #16",))
+    with_thunk_d(f"{name}_i64", "mov x2, Xd", *thunk, postscript=("add x28, x28, #16",))
 
 
 #
@@ -212,20 +328,21 @@ for condition in ARCH_CONDITION_CODES:
 
     # Branches iff a given comparison is true.
     with_nm(f'brcond_i32_{condition}',
+
+        # Grab our immediate argument.
+        "ldr x27, [x28], #8",
+
         # Perform our comparison and conditional branch.
         "subs Wzr, Wn, Wm",
         f"b{condition} 1f",
 
         "0:", # not taken
-            # Consume the branch target, without using it.
-            "add x28, x28, #8",
-
             # Perform our end-of-instruction epilogue.
             *EPILOGUE,
 
         "1:" # taken
             # Update our bytecode pointer to take the label.
-            "ldr x28, [x28]"
+            "ldr x28, [x27]"
     )
 
 
@@ -251,8 +368,8 @@ for condition in ARCH_CONDITION_CODES:
 # MOV variants.
 with_dn("mov_i32",     "mov Wd, Wn")
 with_dn("mov_i64",     "mov Xd, Xn")
-with_d("tci_movi_i32", "ldr w27, [x28], #4", "mov Wd, w27")
-with_d("tci_movi_i64", "ldr x27, [x28], #8", "mov Xd, x27")
+with_d("tci_movi_i32", "ldr Wd, [x28], #8")   # FIXME: encode as 4, not 8
+with_d("tci_movi_i64", "ldr Wd, [x28], #8")
 
 # LOAD variants.
 immediate32_dn("ld8u",      "ldrb  Wd, [Xn, x27]")
@@ -317,6 +434,36 @@ with_dn("bswap64",    "rev Xd, Xn")
 simple("mb_all", "dmb ish")
 simple("mb_st",  "dmb ishst")
 simple("mb_ld",  "dmb ishld")
+
+# Thunks for QEMU_LD.
+ld_thunk("qemu_ld_ub",   "_helper_ret_ldub_mmu")
+ld_thunk("qemu_ld_sb",   "_helper_ret_ldub_mmu_signed")
+ld_thunk("qemu_ld_leuw", "_helper_le_lduw_mmu")
+ld_thunk("qemu_ld_lesw", "_helper_le_lduw_mmu_signed")
+ld_thunk("qemu_ld_leul", "_helper_le_ldul_mmu")
+ld_thunk("qemu_ld_lesl", "_helper_le_ldul_mmu_signed")
+ld_thunk("qemu_ld_leq",  "_helper_le_ldq_mmu")
+ld_thunk("qemu_ld_beuw", "_helper_be_lduw_mmu")
+ld_thunk("qemu_ld_besw", "_helper_be_lduw_mmu_signed")
+ld_thunk("qemu_ld_beul", "_helper_be_ldul_mmu")
+ld_thunk("qemu_ld_besl", "_helper_be_ldul_mmu_signed")
+ld_thunk("qemu_ld_beq",  "_helper_be_ldq_mmu")
+
+# Thunks for QEMU_ST.
+st_thunk("qemu_st_ub",   "_helper_ret_stb_mmu")
+st_thunk("qemu_st_leuw", "_helper_le_stw_mmu")
+st_thunk("qemu_st_leul", "_helper_le_stl_mmu")
+st_thunk("qemu_st_leq",  "_helper_le_stq_mmu")
+st_thunk("qemu_st_beuw", "_helper_be_stw_mmu")
+st_thunk("qemu_st_beul", "_helper_be_stl_mmu")
+st_thunk("qemu_st_beq",  "_helper_be_stq_mmu")
+
+
+
+    # 
+
+    # .. finally, restore LR.
+
 
 
 # Statistics.
