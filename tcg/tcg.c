@@ -634,22 +634,10 @@ static const int tcg_target_call_iarg_regs[] = {
     TCG_REG_R3,
     TCG_REG_R4,
     TCG_REG_R5,
-#if TCG_TARGET_REG_BITS == 32
-    /* 32 bit hosts need 2 * MAX_OPC_PARAM_IARGS registers. */
-    TCG_REG_R6,
-    TCG_REG_R7,
-    TCG_REG_R8,
-    TCG_REG_R9,
-    TCG_REG_R10,
-    TCG_REG_R11,
-#endif
 };
 
 static const int tcg_target_call_oarg_regs[] = {
     TCG_REG_R0,
-#if TCG_TARGET_REG_BITS == 32
-    TCG_REG_R1
-#endif
 };
 
 #ifdef CONFIG_DEBUG_TCG
@@ -862,7 +850,7 @@ static void tcg_out_movi(TCGContext *s, TCGType type,
 static inline void tcg_out_call(TCGContext *s, const tcg_insn_unit *arg)
 {
     tcg_out_nullary_gadget(s, gadget_call);
-    tcg_out_immediate(s, (uintptr_t)arg);
+    tcg_out64(s, (uintptr_t)arg);
 }
 
 /**
@@ -1277,16 +1265,16 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
 
         // We have to emit a different gadget per condition; we'll select which.
         switch(args[2]) {
-            case TCG_COND_EQ:  gadget = gadget_brcond_i64_eq; break;
-            case TCG_COND_NE:  gadget = gadget_brcond_i64_ne; break;
-            case TCG_COND_LT:  gadget = gadget_brcond_i64_lt; break;
-            case TCG_COND_GE:  gadget = gadget_brcond_i64_ge; break;
-            case TCG_COND_LE:  gadget = gadget_brcond_i64_le; break;
-            case TCG_COND_GT:  gadget = gadget_brcond_i64_gt; break;
-            case TCG_COND_LTU: gadget = gadget_brcond_i64_lo; break;
-            case TCG_COND_GEU: gadget = gadget_brcond_i64_pl; break;
-            case TCG_COND_LEU: gadget = gadget_brcond_i64_ls; break;
-            case TCG_COND_GTU: gadget = gadget_brcond_i64_hi; break;
+            case TCG_COND_EQ:  gadget = gadget_brcond_i32_eq; break;
+            case TCG_COND_NE:  gadget = gadget_brcond_i32_ne; break;
+            case TCG_COND_LT:  gadget = gadget_brcond_i32_lt; break;
+            case TCG_COND_GE:  gadget = gadget_brcond_i32_ge; break;
+            case TCG_COND_LE:  gadget = gadget_brcond_i32_le; break;
+            case TCG_COND_GT:  gadget = gadget_brcond_i32_gt; break;
+            case TCG_COND_LTU: gadget = gadget_brcond_i32_lo; break;
+            case TCG_COND_GEU: gadget = gadget_brcond_i32_pl; break;
+            case TCG_COND_LEU: gadget = gadget_brcond_i32_ls; break;
+            case TCG_COND_GTU: gadget = gadget_brcond_i32_hi; break;
             default:
                 g_assert_not_reached();
         }

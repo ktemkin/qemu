@@ -24,6 +24,9 @@
 #include "tcg/tcg-op.h"
 #include "qemu/compiler.h"
 
+// DEBUG ONLY
+#include <dlfcn.h>
+
 /* Enable TCTI assertions only when debugging TCG (and without NDEBUG defined).
  * Without assertions, the interpreter runs much faster. */
 #if defined(CONFIG_DEBUG_TCG)
@@ -32,12 +35,31 @@
 # define tcti_assert(cond) ((void)0)
 #endif
 
+struct guest_state {
+    uint64_t pc;
+    uint64_t lr;
+    uint64_t x[16];
+}
+__attribute__((packed));
 
-void tcti_instrumentation(void *addr, void *next);
-void tcti_instrumentation(void *addr, void *next)
-{
-    fprintf(stderr, "IP: %p, next gadget: %p\n", addr - 8, next);
-    fflush(stderr);
+
+void tcti_instrumentation(struct guest_state *s);
+void tcti_instrumentation(struct guest_state *s) {
+    Dl_info symbol_info = {};
+    char symbol_name[33] = { 0 };
+
+    // Find our gadget's name.
+    void **tbp = (void *)(s->pc - 8);    
+
+    dladdr(*tbp, &symbol_info);
+    if (symbol_info.dli_sname)
+        strlcpy(symbol_name, symbol_info.dli_sname, 32);
+
+    fprintf(stderr, "x0:  %16llx    x1:  %16llx      x2: %16llx     x3: %16llx\n", s->x[ 0],  s->x[ 1],  s->x[ 2], s->x[ 3]);
+    fprintf(stderr, "x4:  %16llx    x5:  %16llx      x6: %16llx     x7: %16llx\n", s->x[ 4],  s->x[ 5],  s->x[ 6], s->x[ 7]);
+    fprintf(stderr, "x8:  %16llx    x9:  %16llx     x10: %16llx    x11: %16llx\n", s->x[ 8],  s->x[ 9],  s->x[10], s->x[11]);
+    fprintf(stderr, "x12: %16llx    x13: %16llx     x14: %16llx    x15: %16llx\n", s->x[12],  s->x[13],  s->x[14], s->x[15]);
+    fprintf(stderr, "----NEXT: %p [%s(%llx, %llx)] ------\n", tbp, symbol_name, tbp[1], tbp[2]);
 }
 
 void tcti_pre_instrumentation(void);
@@ -45,33 +67,30 @@ __attribute__((naked)) void tcti_pre_instrumentation(void)
 {
   asm(
     // Store our machine state.
-    "\nstp x28, lr, [sp, #-16]!"
-    "\nstp x15, x16, [sp, #-16]!"
-    "\nstp x13, x14, [sp, #-16]!"
-    "\nstp x11, x12, [sp, #-16]!"
-    "\nstp x9,  x10, [sp, #-16]!"
-    "\nstp x7,  x8, [sp, #-16]!"
-    "\nstp x5,  x6, [sp, #-16]!"
-    "\nstp x3,  x4, [sp, #-16]!"
-    "\nstp x1,  x2, [sp, #-16]!"
-    "\nstr x0,      [sp, #-16]!"
+    "\nstp x14, x15, [sp, #-16]!"
+    "\nstp x12, x13, [sp, #-16]!"
+    "\nstp x10, x11, [sp, #-16]!"
+    "\nstp x8,  x9,  [sp, #-16]!"
+    "\nstp x6,  x7,  [sp, #-16]!"
+    "\nstp x4,  x5,  [sp, #-16]!"
+    "\nstp x2,  x3,  [sp, #-16]!"
+    "\nstp x0,  x1,  [sp, #-16]!"
+    "\nstp x28, lr,  [sp, #-16]!"
 
     // Call our instrumentation function.
-    "\nmov x0, x28"
-    "\nmov x1, x27"
+    "\nmov x0, sp"
     "\nbl _tcti_instrumentation"
     
     // Restore our machine state.
-    "\nldr x0,      [sp], #16"
-    "\nldp x1,  x2, [sp], #16"
-    "\nldp x3,  x4, [sp], #16"
-    "\nldp x5,  x6, [sp], #16"
-    "\nldp x7,  x8, [sp], #16"
-    "\nldp x9,  x10, [sp], #16"
-    "\nldp x11, x12, [sp], #16"
-    "\nldp x13, x14, [sp], #16"
-    "\nldp x15, x16, [sp], #16"
     "\nldp x28, lr, [sp], #16"
+    "\nldp x0,  x1, [sp], #16"
+    "\nldp x2,  x3, [sp], #16"
+    "\nldp x4,  x5, [sp], #16"
+    "\nldp x6,  x7, [sp], #16"
+    "\nldp x8,  x9, [sp], #16"
+    "\nldp x10, x11, [sp], #16"
+    "\nldp x12, x13, [sp], #16"
+    "\nldp x14, x15, [sp], #16"
 
     //Jump to the next gadget.
     "\nbr x27"
@@ -87,6 +106,8 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
 
     uintptr_t final_tb_ptr = 0;
     uintptr_t sp_value = (uintptr_t)(tcg_temps + CPU_TEMP_BUF_NLONGS);
+
+    fprintf(stderr, "environment lives at %16llx\n", (uintptr_t)env);
 
     // Ensure our target configuration hasn't changed.
     tcti_assert(TCG_AREG0 == TCG_REG_R14);
@@ -121,9 +142,10 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         : "x0", "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
 
-        // We also use x27 for our temporary value, and x28 as our bytecode poitner.
-        "x27", "x28"
+           // We also use x27 for our temporary value, and x28 as our bytecode poitner.
+          "x27", "x28", "cc", "memory"
     );
 
+    fprintf(stderr, "tb exited!\n");
     return final_tb_ptr;
 }

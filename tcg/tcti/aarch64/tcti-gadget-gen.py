@@ -16,11 +16,11 @@ EPILOGUE = (
 )
 
 # Instrumented version of our epilogue; for debug.
-#EPILOGUE = ( 
-#    # Load our next gadget address from our bytecode stream, advancing it.
-#    "ldr x27, [x28], #8",
-#    "b _tcti_pre_instrumentation"
-#)
+EPILOGUE = ( 
+    # Load our next gadget address from our bytecode stream, advancing it.
+    "ldr x27, [x28], #8",
+    "b _tcti_pre_instrumentation"
+)
 
 
 # The number of general-purpose registers we're affording the TCG. This must match
@@ -187,31 +187,29 @@ def with_thunk_d(name, *lines, postscript=()):
     with_d(name,
 
         # Store our machine state.
-        "stp x28, lr, [sp, #-16]!",
-        "stp x15, x16, [sp, #-16]!",
-        "stp x13, x14, [sp, #-16]!",
-        "stp x11, x12, [sp, #-16]!",
-        "stp x9,  x10, [sp, #-16]!",
-        "stp x7,  x8, [sp, #-16]!",
-        "stp x5,  x6, [sp, #-16]!",
-        "stp x3,  x4, [sp, #-16]!",
-        "stp x1,  x2, [sp, #-16]!",
-        "str x0,      [sp, #-16]!",
+        "stp x14, x15, [sp, #-16]!",
+        "stp x12, x13, [sp, #-16]!",
+        "stp x10, x11, [sp, #-16]!",
+        "stp x8,  x9,  [sp, #-16]!",
+        "stp x6,  x7,  [sp, #-16]!",
+        "stp x4,  x5,  [sp, #-16]!",
+        "stp x2,  x3,  [sp, #-16]!",
+        "stp x0,  x1,  [sp, #-16]!",
+        "stp x28, lr,  [sp, #-16]!",
 
         # Perform our actual core code.
         *lines,
         
         # Restore our machine state.
-        "ldr x0,      [sp], #16",
-        "ldp x1,  x2, [sp], #16",
-        "ldp x3,  x4, [sp], #16",
-        "ldp x5,  x6, [sp], #16",
-        "ldp x7,  x8, [sp], #16",
-        "ldp x9,  x10, [sp], #16",
-        "ldp x11, x12, [sp], #16",
-        "ldp x13, x14, [sp], #16",
-        "ldp x15, x16, [sp], #16",
         "ldp x28, lr, [sp], #16",
+        "ldp x0,  x1, [sp], #16",
+        "ldp x2,  x3, [sp], #16",
+        "ldp x4,  x5, [sp], #16",
+        "ldp x6,  x7, [sp], #16",
+        "ldp x8,  x9, [sp], #16",
+        "ldp x10, x11, [sp], #16",
+        "ldp x12, x13, [sp], #16",
+        "ldp x14, x15, [sp], #16",
 
         *postscript
     )
@@ -301,10 +299,16 @@ simple("call",
     # Get our C runtime function's location as a pointer-sized immediate...
     "ldr x27, [x28], #8",
 
+    # Save our link register, as we'll need it to exit the TB.
+    "stp lr, x28, [sp, #-16]!",
+
     # ... and call it using AArch64 calling conventions.
     # Note that x28 is callee saved, so we shouldn't have to worry about this
     # messing up our positioning.
-    "blr x27"
+    "blr x27",
+
+    # Restore our LR.
+    "ldp lr, x28, [sp], #16",
 )
 
 # Branch to a given immediate address.
@@ -337,31 +341,32 @@ for condition in ARCH_CONDITION_CODES:
         f"b{condition} 1f",
 
         "0:", # not taken
-            # Perform our end-of-instruction epilogue.
+           # Perform our end-of-instruction epilogue.
             *EPILOGUE,
 
         "1:" # taken
             # Update our bytecode pointer to take the label.
-            "ldr x28, [x27]"
+            "mov x28, x27"
     )
 
 
     # Branches iff a given comparison is true.
     with_nm(f'brcond_i64_{condition}',
+
+        # Grab our immediate argument.
+        "ldr x27, [x28], #8",
+
         # Perform our comparison and conditional branch.
         "subs Xzr, Xn, Xm",
         f"b{condition} 1f",
 
         "0:", # not taken
-            # Consume the branch target, without using it.
-            "add x28, x28, #8",
-
             # Perform our end-of-instruction epilogue.
             *EPILOGUE,
 
         "1:" # taken
             # Update our bytecode pointer to take the label.
-            "ldr x28, [x28]"
+            "mov x28, x27"
     )
 
 
