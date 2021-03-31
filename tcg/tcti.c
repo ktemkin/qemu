@@ -148,8 +148,8 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         : "x0", "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
 
-           // We also use x27 for our temporary value, and x28 as our bytecode poitner.
-          "x27", "x28", "cc", "memory"
+        // We also use x26/x27 for temporary values, and x28 as our bytecode poitner.
+          "x26", "x27", "x28", "cc", "memory"
     );
 
     return return_value;

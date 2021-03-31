@@ -16,7 +16,7 @@ EPILOGUE = (
 )
 
 # Instrumented version of our epilogue; for debug.
-#EPILOGUE = ( 
+#EPILOGUE = (
 #    # Load our next gadget address from our bytecode stream, advancing it.
 #    "ldr x27, [x28], #8",
 #    "b _tcti_pre_instrumentation"
@@ -299,16 +299,20 @@ simple("call",
     # Get our C runtime function's location as a pointer-sized immediate...
     "ldr x27, [x28], #8",
 
-    # Save our link register, as we'll need it to exit the TB.
-    "stp lr, x28, [sp, #-16]!",
+    # Prepare ourselves to call into our C runtime...
+    *C_CALL_PROLOGUE,
 
-    # ... and call it using AArch64 calling conventions.
-    # Note that x28 is callee saved, so we shouldn't have to worry about this
-    # messing up our positioning.
+    # ... perform the call itself ...
     "blr x27",
 
-    # Restore our LR.
-    "ldp lr, x28, [sp], #16",
+    # Save the result of our call for later.
+    "mov x27, x0",
+
+    # ... and restore our environment.
+    *C_CALL_EPILOGUE,
+
+    # Restore our return value.
+    "mov x0, x27"
 )
 
 # Branch to a given immediate address.
