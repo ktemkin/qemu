@@ -55,11 +55,19 @@ void tcti_instrumentation(struct guest_state *s) {
     if (symbol_info.dli_sname)
         strlcpy(symbol_name, symbol_info.dli_sname, 32);
 
+    // Get our architecture state, so we can print out the guest PC.
+    CPUArchState *env = (void *)s->x[14];
+
+    //offset testing
+    uintptr_t env_ptr = ((uintptr_t)env) + 0x40;
+    uint64_t *touch_loc = (void *)env_ptr;
+
     fprintf(stderr, "x0:  %16llx    x1:  %16llx      x2: %16llx     x3: %16llx\n", s->x[ 0],  s->x[ 1],  s->x[ 2], s->x[ 3]);
     fprintf(stderr, "x4:  %16llx    x5:  %16llx      x6: %16llx     x7: %16llx\n", s->x[ 4],  s->x[ 5],  s->x[ 6], s->x[ 7]);
     fprintf(stderr, "x8:  %16llx    x9:  %16llx     x10: %16llx    x11: %16llx\n", s->x[ 8],  s->x[ 9],  s->x[10], s->x[11]);
     fprintf(stderr, "x12: %16llx    x13: %16llx     x14: %16llx    x15: %16llx\n", s->x[12],  s->x[13],  s->x[14], s->x[15]);
-    fprintf(stderr, "----NEXT: %p [%s(%llx, %llx)] ------\n", tbp, symbol_name, tbp[1], tbp[2]);
+    fprintf(stderr, "gpc: %16llx    glr: %16llx     gsp: %16llx  e[40]: %16llx\n", env->pc, env->xregs[30], env->xregs[31], *touch_loc);
+    fprintf(stderr, "----NEXT: %p [%s(%p, %p)] ------\n", tbp, symbol_name, tbp[1], tbp[2]);
 }
 
 void tcti_pre_instrumentation(void);
@@ -104,10 +112,8 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
     // Create our per-CPU temporary storage.
     long tcg_temps[CPU_TEMP_BUF_NLONGS];
 
-    uintptr_t final_tb_ptr = 0;
+    uint64_t return_value = 0;
     uintptr_t sp_value = (uintptr_t)(tcg_temps + CPU_TEMP_BUF_NLONGS);
-
-    fprintf(stderr, "environment lives at %16llx\n", (uintptr_t)env);
 
     // Ensure our target configuration hasn't changed.
     tcti_assert(TCG_AREG0 == TCG_REG_R14);
@@ -129,10 +135,10 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         "ldr x27, [x28], #8\n"
         "blr x27\n"
 
-        // Finally, we'll copy out our final TB value.
-        "str x28, %[end_tb_ptr]\n"
+        // Finally, we'll copy out our final return value.
+        "str x0, %[return_value]\n"
 
-        : [end_tb_ptr]   "=m" (final_tb_ptr)
+        : [return_value] "=m" (return_value)
 
         : [areg0]        "m"  (env), 
           [sp_value]     "m"  (sp_value), 
@@ -146,6 +152,5 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
           "x27", "x28", "cc", "memory"
     );
 
-    fprintf(stderr, "tb exited!\n");
-    return final_tb_ptr;
+    return return_value;
 }

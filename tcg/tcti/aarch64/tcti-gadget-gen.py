@@ -183,58 +183,51 @@ def with_d(name, *lines):
     with_single(name, 'd', lines)
 
 
+# Assembly code for saving our machine state before entering the C runtime.
+C_CALL_PROLOGUE = [
+    # Store our machine state.
+    "stp x14, x15, [sp, #-16]!",
+    "stp x12, x13, [sp, #-16]!",
+    "stp x10, x11, [sp, #-16]!",
+    "stp x8,  x9,  [sp, #-16]!",
+    "stp x6,  x7,  [sp, #-16]!",
+    "stp x4,  x5,  [sp, #-16]!",
+    "stp x2,  x3,  [sp, #-16]!",
+    "stp x0,  x1,  [sp, #-16]!",
+    "stp x28, lr,  [sp, #-16]!",
+]
+
+# Assembly code for restoring our machine state after leaving the C runtime.
+C_CALL_EPILOGUE = [
+    "ldp x28, lr, [sp], #16",
+    "ldp x0,  x1, [sp], #16",
+    "ldp x2,  x3, [sp], #16",
+    "ldp x4,  x5, [sp], #16",
+    "ldp x6,  x7, [sp], #16",
+    "ldp x8,  x9, [sp], #16",
+    "ldp x10, x11, [sp], #16",
+    "ldp x12, x13, [sp], #16",
+    "ldp x14, x15, [sp], #16",
+]
+
+
 def with_thunk_d(name, *lines, postscript=()):
+    """ Create a thunk into our C runtime for an Rd-substituion operation. """
+
     with_d(name,
-
-        # Store our machine state.
-        "stp x14, x15, [sp, #-16]!",
-        "stp x12, x13, [sp, #-16]!",
-        "stp x10, x11, [sp, #-16]!",
-        "stp x8,  x9,  [sp, #-16]!",
-        "stp x6,  x7,  [sp, #-16]!",
-        "stp x4,  x5,  [sp, #-16]!",
-        "stp x2,  x3,  [sp, #-16]!",
-        "stp x0,  x1,  [sp, #-16]!",
-        "stp x28, lr,  [sp, #-16]!",
-
-        # Perform our actual core code.
+        *C_CALL_PROLOGUE,
         *lines,
-        
-        # Restore our machine state.
-        "ldp x28, lr, [sp], #16",
-        "ldp x0,  x1, [sp], #16",
-        "ldp x2,  x3, [sp], #16",
-        "ldp x4,  x5, [sp], #16",
-        "ldp x6,  x7, [sp], #16",
-        "ldp x8,  x9, [sp], #16",
-        "ldp x10, x11, [sp], #16",
-        "ldp x12, x13, [sp], #16",
-        "ldp x14, x15, [sp], #16",
-
+        *C_CALL_EPILOGUE,
         *postscript
     )
 
-
-
-def ld_thunk(name, c_function_name):
-    """ Creates a thunk into our C runtime for a QEMU LD operation. """
-    with_thunk_d(name, 
-        # Per our calling convention:
-        # - Move our architectural environment into x0, from x14.
-        # - Move our target address into x1, from an immediate64.
-        # - Move our operation info into x2, from an immediate32.
-        # - Move the next bytecode pointer into x3, from x28.
-        "mov   x0, x14",
-        "ldr   x1, [x28], #8",
-        "ldr   x2, [x28], #8",  # FIXME: encode as 4, not 8
-        "mov   x3, x28",
-
-        # Perform our actual core code.
-        f"bl {c_function_name}",
-
-        # Finally, move our returned value into Rd.
-        "mov Rd, r0",
-        postscript=("add x28, x28, #16",)
+def with_thunk_dn(name, *lines, postscript=()):
+    """ Create a thunk into our C runtime for an Rd/Rn-substituion operation. """
+    with_dn(name,
+        *C_CALL_PROLOGUE,
+        *lines,
+        *C_CALL_EPILOGUE,
+        *postscript
     )
 
 
@@ -244,22 +237,25 @@ def ld_thunk(name, c_function_name):
     # Build our thunk...
     thunk = [
         # Per our calling convention:
-        # - Move our architectural environment into x0, from x14.
-        # - Move our target address into x1, from an immediate64.
+        #6 - Move our architectural environment into x0, from x14.
+        # - Move our target address into x1. [Placed in x27 below.]
         # - Move our operation info into x2, from an immediate32.
         # - Move the next bytecode pointer into x3, from x28.
         "mov   x0, x14",
-        "ldr   x1, [x28], #8",
+        "mov   x1, x27",
         "ldr   x2, [x28], #8", # FIXME: encode as 4, not 8
         "mov   x3, x28",
 
         # Perform our actual core code.
         f"bl {c_function_name}",
+
+        # Temporarily store our result in a register that won't get trashed.
+        "mov x27, x0",
     ]   
 
     # ... and instantiate it in 32 and 64 bit versions.
-    with_thunk_d(f"{name}_i32", *thunk, "mov Wd, w0", postscript=("add x28, x28, #16",))
-    with_thunk_d(f"{name}_i64", *thunk, "mov Xd, x0", postscript=("add x28, x28, #16",))
+    with_thunk_dn(f"{name}_i32", "mov x27, Xd", *thunk, postscript=("add x28, x28, #8", "mov Wn, w27"))
+    with_thunk_dn(f"{name}_i64", "mov x27, Xd", *thunk, postscript=("add x28, x28, #8", "mov Xn, x27"))
 
 
 def st_thunk(name, c_function_name):
@@ -269,12 +265,13 @@ def st_thunk(name, c_function_name):
     thunk = [
         # Per our calling convention:
         # - Move our architectural environment into x0, from x14.
-        # - Move our target address into x1, from an immediate64.
-        # - Move our target value into x2. [Done below]
+        # - Move our target address into x1. [Moved into x26 below].
+        # - Move our target value into x2. [Moved into x27 below].
         # - Move our operation info into x3, from an immediate32.
         # - Move the next bytecode pointer into x4, from x28.
         "mov   x0, x14",
-        "ldr   x1, [x28], #8",
+        "mov   x1, x26",
+        "mov   x2, x27",
         "ldr   x3, [x28], #8", # FIXME: encode as 4, not 8
         "mov   x4, x28",
 
@@ -282,9 +279,12 @@ def st_thunk(name, c_function_name):
         f"bl {c_function_name}",
     ]   
 
+    # Post-script: re-consume our immediates.
+    ps = ("add x28, x28, #8",)
+
     # ... and instantiate it in 32 and 64 bit versions.
-    with_thunk_d(f"{name}_i32", "mov w2, Wd", *thunk, postscript=("add x28, x28, #16",))
-    with_thunk_d(f"{name}_i64", "mov x2, Xd", *thunk, postscript=("add x28, x28, #16",))
+    with_thunk_dn(f"{name}_i32", "mov x27, Xd", "mov w26, Wn", *thunk, postscript=ps)
+    with_thunk_dn(f"{name}_i64", "mov x27, Xd", "mov x26, Xn", *thunk, postscript=ps)
 
 
 #
@@ -314,9 +314,20 @@ simple("call",
 # Branch to a given immediate address.
 simple("br",
     # Use our immediate argument as our new bytecode-pointer location.
-    # We assume our TCG generator always issues 
-    "ldr x27, [x28], #8",
+    "ldr x28, [x28]"
 )
+
+# Exit from a translation buffer execution.
+simple("exit_tb",
+
+    # We have a single immediate argument, which contains our return code.
+    # Place it into x0, as one would a return code.
+    "ldr x0, [x28], #8",
+
+    # And finally, return back to the code that invoked our gadget stream.
+    "ret"
+)
+
 
 for condition in ARCH_CONDITION_CODES:
 
@@ -373,8 +384,8 @@ for condition in ARCH_CONDITION_CODES:
 # MOV variants.
 with_dn("mov_i32",     "mov Wd, Wn")
 with_dn("mov_i64",     "mov Xd, Xn")
-with_d("tci_movi_i32", "ldr Wd, [x28], #8")   # FIXME: encode as 4, not 8
-with_d("tci_movi_i64", "ldr Wd, [x28], #8")
+with_d("movi_i32", "ldr Wd, [x28], #8")   # FIXME: encode as 4, not 8
+with_d("movi_i64", "ldr Xd, [x28], #8")
 
 # LOAD variants.
 immediate32_dn("ld8u",      "ldrb  Wd, [Xn, x27]")

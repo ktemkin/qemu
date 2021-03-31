@@ -49,7 +49,7 @@
 #elif UINTPTR_MAX == UINT64_MAX
 # define TCG_TARGET_REG_BITS 64
 #else
-# error Unknown pointer size for tci target
+# error Unknown pointer size for tcti target
 #endif
 
 #ifdef CONFIG_DEBUG_TCG
@@ -170,14 +170,7 @@ void tci_disas(uint8_t opc);
 
 #define TCG_TARGET_HAS_MEMORY_BSWAP     1
 
-static inline void tb_target_set_jmp_target(uintptr_t tc_ptr, uintptr_t instruction,
-                                            uintptr_t jmp_rw, uintptr_t addr)
-{
-    /* Get a pointer to our immediate, which exists after a single pointer. */
-    int64_t *immediate = (int64_t*)instruction + 1;
+void tb_target_set_jmp_target(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 
-    /* Patch it to be match our target address. */
-    qatomic_set((int64_t *)immediate, addr);
-}
 
 #endif /* TCG_TARGET_H */
