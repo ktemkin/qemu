@@ -477,7 +477,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case TCG_COND_LE:  gadget = gadget_setcond_i32_le; break;
             case TCG_COND_GT:  gadget = gadget_setcond_i32_gt; break;
             case TCG_COND_LTU: gadget = gadget_setcond_i32_lo; break;
-            case TCG_COND_GEU: gadget = gadget_setcond_i32_pl; break;
+            case TCG_COND_GEU: gadget = gadget_setcond_i32_hs; break;
             case TCG_COND_LEU: gadget = gadget_setcond_i32_ls; break;
             case TCG_COND_GTU: gadget = gadget_setcond_i32_hi; break;
             default:
@@ -501,7 +501,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case TCG_COND_LE:  gadget = gadget_setcond_i64_le; break;
             case TCG_COND_GT:  gadget = gadget_setcond_i64_gt; break;
             case TCG_COND_LTU: gadget = gadget_setcond_i64_lo; break;
-            case TCG_COND_GEU: gadget = gadget_setcond_i64_pl; break;
+            case TCG_COND_GEU: gadget = gadget_setcond_i64_hs; break;
             case TCG_COND_LEU: gadget = gadget_setcond_i64_ls; break;
             case TCG_COND_GTU: gadget = gadget_setcond_i64_hi; break;
             default:
@@ -553,8 +553,6 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
     /**
      * Store instructions.
      */
-
-
     case INDEX_op_st8_i32:
     case INDEX_op_st8_i64:
         tcg_out_ldst_gadget(s, gadget_st8, args[0], args[1], args[2]); 
@@ -713,7 +711,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case TCG_COND_LE:  gadget = gadget_brcond_i64_le; break;
             case TCG_COND_GT:  gadget = gadget_brcond_i64_gt; break;
             case TCG_COND_LTU: gadget = gadget_brcond_i64_lo; break;
-            case TCG_COND_GEU: gadget = gadget_brcond_i64_pl; break;
+            case TCG_COND_GEU: gadget = gadget_brcond_i64_hs; break;
             case TCG_COND_LEU: gadget = gadget_brcond_i64_ls; break;
             case TCG_COND_GTU: gadget = gadget_brcond_i64_hi; break;
             default:
@@ -824,7 +822,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             case TCG_COND_LE:  gadget = gadget_brcond_i32_le; break;
             case TCG_COND_GT:  gadget = gadget_brcond_i32_gt; break;
             case TCG_COND_LTU: gadget = gadget_brcond_i32_lo; break;
-            case TCG_COND_GEU: gadget = gadget_brcond_i32_pl; break;
+            case TCG_COND_GEU: gadget = gadget_brcond_i32_hs; break;
             case TCG_COND_LEU: gadget = gadget_brcond_i32_ls; break;
             case TCG_COND_GTU: gadget = gadget_brcond_i32_hi; break;
             default:

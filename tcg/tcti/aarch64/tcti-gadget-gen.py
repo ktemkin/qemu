@@ -16,11 +16,11 @@ EPILOGUE = (
 )
 
 # Instrumented version of our epilogue; for debug.
-EPILOGUE = ( 
-    # Load our next gadget address from our bytecode stream, advancing it.
-    "ldr x27, [x28], #8",
-    "b _tcti_pre_instrumentation"
-)
+#EPILOGUE = ( 
+#    # Load our next gadget address from our bytecode stream, advancing it.
+#    "ldr x27, [x28], #8",
+#    "b _tcti_pre_instrumentation"
+#)
 
 
 # The number of general-purpose registers we're affording the TCG. This must match
@@ -29,7 +29,7 @@ TCG_REGISTER_COUNT   = 16
 TCG_REGISTER_NUMBERS = list(range(TCG_REGISTER_COUNT))
 
 # Helper that provides each of the AArch64 condition codes of interest.
-ARCH_CONDITION_CODES = ["eq", "ne", "lt", "ge", "le", "gt", "lo", "pl", "ls", "hi"]
+ARCH_CONDITION_CODES = ["eq", "ne", "lt", "ge", "le", "gt", "lo", "hs", "ls", "hi"]
 
 # Statistics.
 gadgets      = 0
@@ -254,8 +254,8 @@ def ld_thunk(name, c_function_name):
     ]   
 
     # ... and instantiate it in 32 and 64 bit versions.
-    with_thunk_dn(f"{name}_i32", "mov x27, Xd", *thunk, postscript=("add x28, x28, #8", "mov Wn, w27"))
-    with_thunk_dn(f"{name}_i64", "mov x27, Xd", *thunk, postscript=("add x28, x28, #8", "mov Xn, x27"))
+    with_thunk_dn(f"{name}_i32", "mov x27, Xn", *thunk, postscript=("add x28, x28, #8", "mov Wd, w27"))
+    with_thunk_dn(f"{name}_i64", "mov x27, Xn", *thunk, postscript=("add x28, x28, #8", "mov Xd, x27"))
 
 
 def st_thunk(name, c_function_name):

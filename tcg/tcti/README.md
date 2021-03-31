@@ -10,14 +10,12 @@ Since TCG-TCI is optimized for sets of 14 GP registers and aarch64 has 30, we co
 
 | Regs    | Use                   |
 | :------ | :-------------------- |
-| x1-x14  | Guest GP Registers    |
-| x15     | TCTI Reserved?        |
-| x16     | TCTI Reserved?        |
-| x17-x27 | TCTI Temporary        |
+| x1-x15  | Guest Registers       |
+| x27     | TCTI register         |
 | x28     | Thread-stream pointer |
 | x30     | Link register         |
-| SP      | Stack Pointer, all    |
-| PC      | Program Counter, all  |
+| SP      | Stack Pointer, host   |
+| PC      | Program Counter, host |
 
 In pseudocode:
 
@@ -97,7 +95,7 @@ cset Wd, <cond>
 | LE        | LE           |
 | GT        | GT           |
 | LTU       | LO           |
-| GEU       | PL           |
+| GEU       | HS           |
 | LEU       | LS           |
 | GTU       | HI           |
 
