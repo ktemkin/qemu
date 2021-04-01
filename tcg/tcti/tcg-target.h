@@ -40,85 +40,123 @@
 #ifndef TCG_TARGET_H
 #define TCG_TARGET_H
 
-#define TCG_TARGET_INTERPRETER 1
-#define TCG_TARGET_INSN_UNIT_SIZE 1
-#define TCG_TARGET_TLB_DISPLACEMENT_BITS 32
-
 #if UINTPTR_MAX == UINT32_MAX
-# define TCG_TARGET_REG_BITS 32
+# error We only support AArch64 running in 64B mode.
 #elif UINTPTR_MAX == UINT64_MAX
 # define TCG_TARGET_REG_BITS 64
 #else
 # error Unknown pointer size for tcti target
 #endif
 
-#ifdef CONFIG_DEBUG_TCG
-/* Enable debug output. */
-#define CONFIG_DEBUG_TCG_INTERPRETER
-#endif
+#define TCG_TARGET_INSN_UNIT_SIZE        1
+#define TCG_TARGET_TLB_DISPLACEMENT_BITS 32
 
-/* Optional instructions. */
+// We're an interpreted target; even if we're JIT-compiling to our interpreter's
+// weird psuedo-native bytecode. We'll indicate that we're intepreted.
+#define TCG_TARGET_INTERPRETER 1
 
-#define TCG_TARGET_HAS_bswap16_i32      1
-#define TCG_TARGET_HAS_bswap32_i32      1
+//
+// Supported optional instructions.
+//
+
+// Divs.
 #define TCG_TARGET_HAS_div_i32          1
 #define TCG_TARGET_HAS_rem_i32          1
+#define TCG_TARGET_HAS_div_i64          1
+#define TCG_TARGET_HAS_rem_i64          1
+
+// Extends.
 #define TCG_TARGET_HAS_ext8s_i32        1
 #define TCG_TARGET_HAS_ext16s_i32       1
 #define TCG_TARGET_HAS_ext8u_i32        1
 #define TCG_TARGET_HAS_ext16u_i32       1
-#define TCG_TARGET_HAS_andc_i32         0
-#define TCG_TARGET_HAS_deposit_i32      0
-#define TCG_TARGET_HAS_extract_i32      0
-#define TCG_TARGET_HAS_sextract_i32     0
-#define TCG_TARGET_HAS_extract2_i32     0
-#define TCG_TARGET_HAS_eqv_i32          0
-#define TCG_TARGET_HAS_nand_i32         0
-#define TCG_TARGET_HAS_nor_i32          0
-#define TCG_TARGET_HAS_clz_i32          0
-#define TCG_TARGET_HAS_ctz_i32          0
-#define TCG_TARGET_HAS_ctpop_i32        0
-#define TCG_TARGET_HAS_neg_i32          1
-#define TCG_TARGET_HAS_not_i32          1
-#define TCG_TARGET_HAS_orc_i32          0
-#define TCG_TARGET_HAS_rot_i32          1
-#define TCG_TARGET_HAS_movcond_i32      0
-#define TCG_TARGET_HAS_muls2_i32        0
-#define TCG_TARGET_HAS_muluh_i32        0
-#define TCG_TARGET_HAS_mulsh_i32        0
-#define TCG_TARGET_HAS_goto_ptr         0
-#define TCG_TARGET_HAS_direct_jump      1
-#define TCG_TARGET_HAS_qemu_st8_i32     0
-
-#define TCG_TARGET_HAS_extrl_i64_i32    0
-#define TCG_TARGET_HAS_extrh_i64_i32    0
-#define TCG_TARGET_HAS_bswap16_i64      1
-#define TCG_TARGET_HAS_bswap32_i64      1
-#define TCG_TARGET_HAS_bswap64_i64      1
-#define TCG_TARGET_HAS_deposit_i64      0
-#define TCG_TARGET_HAS_extract_i64      0
-#define TCG_TARGET_HAS_sextract_i64     0
-#define TCG_TARGET_HAS_extract2_i64     0
-#define TCG_TARGET_HAS_div_i64          1
-#define TCG_TARGET_HAS_rem_i64          1
 #define TCG_TARGET_HAS_ext8s_i64        1
 #define TCG_TARGET_HAS_ext16s_i64       1
 #define TCG_TARGET_HAS_ext32s_i64       1
 #define TCG_TARGET_HAS_ext8u_i64        1
 #define TCG_TARGET_HAS_ext16u_i64       1
 #define TCG_TARGET_HAS_ext32u_i64       1
-#define TCG_TARGET_HAS_andc_i64         0
-#define TCG_TARGET_HAS_eqv_i64          0
-#define TCG_TARGET_HAS_nand_i64         0
+
+// Logicals.
+#define TCG_TARGET_HAS_neg_i32          1
+#define TCG_TARGET_HAS_not_i32          1
+#define TCG_TARGET_HAS_neg_i64          1
+#define TCG_TARGET_HAS_not_i64          1
+
+#define TCG_TARGET_HAS_andc_i32         1
+#define TCG_TARGET_HAS_orc_i32          1
+#define TCG_TARGET_HAS_eqv_i32          1
+#define TCG_TARGET_HAS_andc_i64         1
+#define TCG_TARGET_HAS_eqv_i64          1
+#define TCG_TARGET_HAS_orc_i64          1
+
+// We don't curretly support rotates, since AArch64 lacks ROL.
+// We'll fix this later.
+#define TCG_TARGET_HAS_rot_i32          0
+#define TCG_TARGET_HAS_rot_i64          0
+
+// Swaps.
+#define TCG_TARGET_HAS_bswap16_i32      1
+#define TCG_TARGET_HAS_bswap32_i32      1
+#define TCG_TARGET_HAS_bswap16_i64      1
+#define TCG_TARGET_HAS_bswap32_i64      1
+#define TCG_TARGET_HAS_bswap64_i64      1
+#define TCG_TARGET_HAS_MEMORY_BSWAP     1
+
+// Specify we'll handle direct jumps.
+#define TCG_TARGET_HAS_direct_jump      1
+
+//
+// Potential TODOs.
+//
+
+// TODO: implement DEPOSIT as BFI.
+#define TCG_TARGET_HAS_deposit_i32      0
+#define TCG_TARGET_HAS_deposit_i64      0
+
+// TODO: implement EXTRACT as BFX.
+#define TCG_TARGET_HAS_extract_i32      0
+#define TCG_TARGET_HAS_sextract_i32     0
+#define TCG_TARGET_HAS_extract_i64      0
+#define TCG_TARGET_HAS_sextract_i64     0
+
+// TODO: it might be worth writing a gadget for this
+#define TCG_TARGET_HAS_movcond_i32      0
+#define TCG_TARGET_HAS_movcond_i64      0
+
+//
+// Unsupported instructions.
+//
+
+// ARMv8 doesn't have instructions for NAND/NOR.
+#define TCG_TARGET_HAS_nand_i32         0
+#define TCG_TARGET_HAS_nor_i32          0
 #define TCG_TARGET_HAS_nor_i64          0
+#define TCG_TARGET_HAS_nand_i64         0
+
+// aarch64's CLZ is implemented without a condition, so it
+#define TCG_TARGET_HAS_clz_i32          0
+#define TCG_TARGET_HAS_ctz_i32          0
+#define TCG_TARGET_HAS_ctpop_i32        0
 #define TCG_TARGET_HAS_clz_i64          0
 #define TCG_TARGET_HAS_ctz_i64          0
 #define TCG_TARGET_HAS_ctpop_i64        0
-#define TCG_TARGET_HAS_neg_i64          1
-#define TCG_TARGET_HAS_not_i64          1
-#define TCG_TARGET_HAS_orc_i64          0
-#define TCG_TARGET_HAS_rot_i64          1
-#define TCG_TARGET_HAS_movcond_i64      0
+
+
+// GOTO_PTR is too complex to emit a simple gadget for.
+// We'll let C handle it, since the overhead is similar.
+#define TCG_TARGET_HAS_goto_ptr         0
+
+// We don't have a simple gadget for this, since we're always assuming softmmu.
+#define TCG_TARGET_HAS_qemu_st8_i32     0
+
+// No AArch64 equivalent.a
+#define TCG_TARGET_HAS_extrl_i64_i32    0
+#define TCG_TARGET_HAS_extrh_i64_i32    0
+
+#define TCG_TARGET_HAS_extract2_i64     0
+
+// These should always be zero on our 64B platform.
 #define TCG_TARGET_HAS_muls2_i64        0
 #define TCG_TARGET_HAS_add2_i32         0
 #define TCG_TARGET_HAS_sub2_i32         0
@@ -128,8 +166,17 @@
 #define TCG_TARGET_HAS_mulu2_i64        0
 #define TCG_TARGET_HAS_muluh_i64        0
 #define TCG_TARGET_HAS_mulsh_i64        0
+#define TCG_TARGET_HAS_extract2_i32     0
+#define TCG_TARGET_HAS_muls2_i32        0
+#define TCG_TARGET_HAS_muluh_i32        0
+#define TCG_TARGET_HAS_mulsh_i32        0
 
-/* Number of registers available. */
+//
+// Platform metadata.
+//
+
+// Number of registers available.
+// It might make sense to up these, since we can also use x16 -> x25?
 #define TCG_TARGET_NB_REGS 16
 
 /* List of registers which are used by TCG. */
@@ -151,24 +198,21 @@ typedef enum {
     TCG_REG_R14,
     TCG_REG_R15,
 
-    TCG_AREG0 = TCG_REG_R14,
+    TCG_AREG0          = TCG_REG_R14,
     TCG_REG_CALL_STACK = TCG_REG_R15,
 } TCGReg;
 
-/* Used for function call generation. */
+// Specify the shape of the stack our runtime will use.
 #define TCG_TARGET_CALL_STACK_OFFSET    0
 #define TCG_TARGET_STACK_ALIGN          16
 
-void tci_disas(uint8_t opc);
-
+// We're interpreted, so we'll use our own code to run TB_EXEC.
 #define HAVE_TCG_QEMU_TB_EXEC
 
-/* We could notice __i386__ or __s390x__ and reduce the barriers depending
-   on the host.  But if you want performance, you use the normal backend.
-   We prefer consistency across hosts on this.  */
+// We'll need to enforce memory ordering with barriers.
 #define TCG_TARGET_DEFAULT_MO  (0)
 
-#define TCG_TARGET_HAS_MEMORY_BSWAP     1
+void tci_disas(uint8_t opc);
 
 void tb_target_set_jmp_target(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 

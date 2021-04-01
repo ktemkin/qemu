@@ -592,13 +592,17 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_ternary_gadget(s, gadget_and_i32, args[0], args[1], args[2]); 
         break;
 
-    // TODO: possibly implement these?
-    // Is it worth the extra size? Probably.
-    //case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
-    //case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_eqv_i32). */
-    //case INDEX_op_nand_i32:     /* Optional (TCG_TARGET_HAS_nand_i32). */
-    //case INDEX_op_nor_i32:      /* Optional (TCG_TARGET_HAS_nor_i32). */
-    //case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i32). */
+    case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
+        tcg_out_ternary_gadget(s, gadget_andc_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
+        tcg_out_ternary_gadget(s, gadget_orc_i32, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
+        tcg_out_ternary_gadget(s, gadget_eqv_i32, args[0], args[1], args[2]); 
+        break;
 
     case INDEX_op_or_i32:
         tcg_out_ternary_gadget(s, gadget_or_i32, args[0], args[1], args[2]); 
@@ -620,15 +624,12 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_ternary_gadget(s, gadget_sar_i32, args[0], args[1], args[2]); 
         break;
 
-    case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-        tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]); 
-        break;
+    //case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+    //    tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]); 
+    //    break;
 
-    case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-        tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]); 
-
-
-    //case INDEX_op_deposit_i32:  /* Optional (TCG_TARGET_HAS_deposit_i32). */
+    //case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
+    //    tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]); 
 
     case INDEX_op_add_i64:
         tcg_out_ternary_gadget(s, gadget_add_i64, args[0], args[1], args[2]); 
@@ -646,11 +647,20 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_ternary_gadget(s, gadget_and_i64, args[0], args[1], args[2]); 
         break;
 
-    //case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
-    //case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
+    case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
+        tcg_out_ternary_gadget(s, gadget_andc_i64, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
+        tcg_out_ternary_gadget(s, gadget_orc_i64, args[0], args[1], args[2]); 
+        break;
+
+    case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
+        tcg_out_ternary_gadget(s, gadget_eqv_i64, args[0], args[1], args[2]); 
+        break;
+
     //case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
     //case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
-    //case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
 
     case INDEX_op_or_i64:
         tcg_out_ternary_gadget(s, gadget_or_i64, args[0], args[1], args[2]); 
@@ -672,13 +682,13 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         tcg_out_ternary_gadget(s, gadget_sar_i64, args[0], args[1], args[2]); 
         break;
 
-    case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-        tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]); 
-        break;
+    //case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+    //    tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]); 
+    //    break;
 
-    case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-        tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]); 
-        break;
+    //case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
+    //    tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]); 
+    //    break;
 
     case INDEX_op_div_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
         tcg_out_ternary_gadget(s, gadget_div_i64, args[0], args[1], args[2]); 
@@ -695,8 +705,6 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
     case INDEX_op_remu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
         tcg_out_ternary_gadget(s, gadget_remu_i64, args[0], args[1], args[2]); 
         break;
-
-    //case INDEX_op_deposit_i64:  /* Optional (TCG_TARGET_HAS_deposit_i64). */
 
     case INDEX_op_brcond_i64:
     {
@@ -946,8 +954,6 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
         break;
     }
 
-
-
     // Memory barriers.
     case INDEX_op_mb:
     {
@@ -1003,13 +1009,6 @@ static int tcg_target_const_match(tcg_target_long val, TCGType type,
 
 static void tcg_target_init(TCGContext *s)
 {
-#if defined(CONFIG_DEBUG_TCG_INTERPRETER)
-    const char *envval = getenv("DEBUG_TCG");
-    if (envval) {
-        qemu_set_log(strtol(envval, NULL, 0));
-    }
-#endif
-
     /* The current code uses uint8_t for tcg operations. */
     tcg_debug_assert(tcg_op_defs_max <= UINT8_MAX);
 
@@ -1017,12 +1016,12 @@ static void tcg_target_init(TCGContext *s)
     tcg_target_available_regs[TCG_TYPE_I32] = BIT(TCG_TARGET_NB_REGS) - 1;
     /* Registers available for 64 bit operations. */
     tcg_target_available_regs[TCG_TYPE_I64] = BIT(TCG_TARGET_NB_REGS) - 1;
+
     /* TODO: Which registers should be set here? */
     tcg_target_call_clobber_regs = BIT(TCG_TARGET_NB_REGS) - 1;
 
     s->reserved_regs = 0;
     tcg_regset_set_reg(s->reserved_regs, TCG_REG_CALL_STACK);
-    
 
     /* We use negative offsets from "sp" so that we can distinguish
        stores that might pretend to be call arguments.  */

@@ -426,16 +426,20 @@ with_dnm("remu_i64", "udiv x27, Xn, Xm", "msub Xd, x27, Xm, Xn")
 math_dn( "not",  "mvn")
 math_dn( "neg",  "neg")
 math_dnm("and",  "and")
+math_dnm("andc", "bic")
 math_dnm("or",   "orr")
+math_dnm("orc",  "orn")
 math_dnm("xor",  "eor")
+math_dnm("eqv",  "eon")
 math_dnm("shl",  "lsl")
 math_dnm("shr",  "lsr")
 math_dnm("sar",  "asr")
-math_dnm("rotr", "ror")
 
 # AArch64 lacks a Rotate Left; so we instead rotate right by a negative.
-with_dnm("rotl_i32", "neg w27, Wm", "ror Wd, Wn, w27")
-with_dnm("rotl_i64", "neg x27, Xm", "ror Xd, Xn, x27")
+# TODO: validate this?
+#math_dnm("rotr", "ror")
+#with_dnm("rotl_i32", "neg w27, Wm", "ror Wd, Wn, w27")
+#with_dnm("rotl_i64", "neg x27, Xm", "ror Xd, Xn, x27")
 
 # Numeric extension.
 math_dn("ext8s",      "sxtb")
