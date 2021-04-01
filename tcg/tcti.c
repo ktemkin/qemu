@@ -42,6 +42,7 @@ struct guest_state {
 }
 __attribute__((packed));
 
+#ifdef TCG_TCTI_PROVIDE_INSTRUMENTATION
 
 void tcti_instrumentation(struct guest_state *s);
 void tcti_instrumentation(struct guest_state *s) {
@@ -66,7 +67,6 @@ void tcti_instrumentation(struct guest_state *s) {
     fprintf(stderr, "x4:  %16llx    x5:  %16llx      x6: %16llx     x7: %16llx\n", s->x[ 4],  s->x[ 5],  s->x[ 6], s->x[ 7]);
     fprintf(stderr, "x8:  %16llx    x9:  %16llx     x10: %16llx    x11: %16llx\n", s->x[ 8],  s->x[ 9],  s->x[10], s->x[11]);
     fprintf(stderr, "x12: %16llx    x13: %16llx     x14: %16llx    x15: %16llx\n", s->x[12],  s->x[13],  s->x[14], s->x[15]);
-    fprintf(stderr, "gpc: %16llx    glr: %16llx     gsp: %16llx  e[40]: %16llx\n", env->pc, env->xregs[30], env->xregs[31], *touch_loc);
     fprintf(stderr, "----NEXT: %p [%s(%p, %p)] ------\n", tbp, symbol_name, tbp[1], tbp[2]);
 }
 
@@ -104,6 +104,8 @@ __attribute__((naked)) void tcti_pre_instrumentation(void)
     "\nbr x27"
   );
 }
+
+#endif
 
 
 /* Dispatch the bytecode stream contained in our translation buffer. */
