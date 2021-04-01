@@ -362,6 +362,7 @@ tsan="no"
 fortify_source="$default_feature"
 strip_opt="yes"
 tcg_interpreter="false"
+tcg_threaded_interpreter="false"
 bigendian="no"
 mingw32="no"
 gcov="no"
@@ -1148,6 +1149,10 @@ for opt do
   --disable-tcg-interpreter) tcg_interpreter="false"
   ;;
   --enable-tcg-interpreter) tcg_interpreter="true"
+  ;;
+  --disable-tcg-tcti) tcg_threaded_interpreter="false"
+  ;;
+  --enable-tcg-tcti) tcg_threaded_interpreter="true"
   ;;
   --disable-cap-ng)  cap_ng="disabled"
   ;;
@@ -6512,9 +6517,8 @@ NINJA=$ninja $meson setup \
         -Dvhost_user_blk_server=$vhost_user_blk_server -Dmultiprocess=$multiprocess \
         -Dfuse=$fuse -Dfuse_lseek=$fuse_lseek -Dguest_agent_msi=$guest_agent_msi \
         $(if test "$default_features" = no; then echo "-Dauto_features=disabled"; fi) \
-	-Dtcg_interpreter=$tcg_interpreter -Dshared_lib=$shared_lib \
-        $cross_arg \
-        "$PWD" "$source_path"
+	-Dtcg_interpreter=$tcg_interpreter -Dtcg_threaded_interpreter=$tcg_threaded_interpreter\
+	-Dshared_lib=$shared_lib $cross_arg "$PWD" "$source_path"
 
 if test "$?" -ne 0 ; then
     error_exit "meson setup failed"
