@@ -22,6 +22,8 @@
  * THE SOFTWARE.
  */
 
+#define TCTI_GADGET_IMMEDIATE_ARRAY_LEN 64
+
 // Grab our gadget definitions.
 // FIXME: use the system path instead of hardcoding this?
 #include "aarch64/tcti-gadgets.c.inc"
@@ -327,21 +329,73 @@ static void tcg_out_binary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB
 
 /* Write gadget pointer (three registers). */
 static void tcg_out_ternary_gadget(TCGContext *s, void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], unsigned reg0, unsigned reg1, unsigned reg2)
-
 {
     tcg_out_nullary_gadget(s, gadget_base[reg0][reg1][reg2]);
 }
 
 
-/* Write gadget pointer (two registers). */
-static void tcg_out_ldst_gadget(TCGContext *s, void * gadget_base[16][16], unsigned reg0, unsigned reg1, uint32_t offset)
+/**
+ * Version of our LDST generator that defers to more optimized gadgets selectively.
+ */
+static void tcg_out_ldst_gadget_inner(TCGContext *s, 
+    void *gadget_base[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS], 
+    void *gadget_pos_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    void *gadget_shifted_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    void *gadget_neg_imm[TCG_TARGET_NB_REGS][TCG_TARGET_NB_REGS][TCTI_GADGET_IMMEDIATE_ARRAY_LEN], 
+    unsigned reg0, unsigned reg1, uint32_t offset)
 {
     int64_t extended_offset = (int32_t)offset;
+    bool is_negative = (extended_offset < 0);
 
+    // Optimal case: we have a gadget that handles our specific offset, so we don't need to encode
+    // an immediate. This saves us a bunch of speed. :)
+
+    // We handle positive and negative gadgets separately, in order to allow for asymmetrical
+    // collections of pre-made gadgets.
+    if (!is_negative) 
+    {
+        uint64_t shifted_offset = (extended_offset >> 3);
+        bool aligned_to_8B = ((extended_offset & 0b111) == 0);
+
+        bool have_optimized_gadget = (extended_offset < TCTI_GADGET_IMMEDIATE_ARRAY_LEN);
+        bool have_shifted_gadget   = (shifted_offset  < TCTI_GADGET_IMMEDIATE_ARRAY_LEN);
+
+        // More optimal case: we have a gadget that directly encodes the argument.
+        if (have_optimized_gadget) {
+            tcg_out_nullary_gadget(s, gadget_pos_imm[reg0][reg1][extended_offset]);
+            return;
+        } 
+
+        // Special case: it's frequent to have low-numbered positive offsets that are aligned
+        // to 16B boundaries
+        else if(aligned_to_8B && have_shifted_gadget) {
+            tcg_out_nullary_gadget(s, gadget_shifted_imm[reg0][reg1][shifted_offset]);
+            return;
+        }
+    } 
+    else {
+        uint64_t negated_offset = -(extended_offset);
+
+        // More optimal case: we have a gadget that directly encodes the argument.
+        if (negated_offset < TCTI_GADGET_IMMEDIATE_ARRAY_LEN) {
+            tcg_out_nullary_gadget(s, gadget_neg_imm[reg0][reg1][negated_offset]);
+            return;
+        }
+    }
+
+    // Less optimal case: we don't have a gadget specifically for this. Emit the general case immediate.
     tcg_out_binary_gadget(s, gadget_base, reg0, reg1);
-    //tcg_out32(s, offset);
-    tcg_out64(s, extended_offset);
+    tcg_out64(s, extended_offset); //tcg_out32(s, offset);
 }
+
+/* Shorthand for the above, that prevents us from having to specify the name three times. */
+#define tcg_out_ldst_gadget(s, name, a, b, c) \
+    tcg_out_ldst_gadget_inner(s, name, \
+        name ## _imm,  \
+        name ## _sh8_imm,  \
+        name ## _neg_imm, \
+    a, b, c)
+
 
 
 /* Write label. */
@@ -373,22 +427,66 @@ static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
     return true;
 }
 
+
+static void tcg_out_movi_i32(TCGContext *s, TCGReg t0, tcg_target_long arg)
+{
+    bool is_negative = (arg < 0);
+
+    // We handle positive and negative gadgets separately, in order to allow for asymmetrical
+    // collections of pre-made gadgets.
+    if (!is_negative) 
+    {
+        // More optimal case: we have a gadget that directly encodes the argument.
+        if (arg < ARRAY_SIZE(gadget_movi_imm_i32[t0])) {
+            tcg_out_nullary_gadget(s, gadget_movi_imm_i32[t0][arg]);
+            return;
+        }
+    } 
+    else {
+
+    }
+
+    // Emit the mov and its immediate.
+    tcg_out_unary_gadget(s, gadget_movi_i32, t0);
+    tcg_out64(s, arg); // TODO: make 32b?
+}
+
+
+static void tcg_out_movi_i64(TCGContext *s, TCGReg t0, tcg_target_long arg)
+{
+    uint8_t is_negative = arg < 0;
+
+    // We handle positive and negative gadgets separately, in order to allow for asymmetrical
+    // collections of pre-made gadgets.
+    if (!is_negative) 
+    {
+        // More optimal case: we have a gadget that directly encodes the argument.
+        if (arg < ARRAY_SIZE(gadget_movi_imm_i64[t0])) {
+            tcg_out_nullary_gadget(s, gadget_movi_imm_i64[t0][arg]);
+            return;
+        }
+    } 
+    else {
+
+    }
+
+    // TODO: optimize the negative case, too?
+
+    // Less optimal case: emit the mov and its immediate.
+    tcg_out_unary_gadget(s, gadget_movi_i64, t0);
+    tcg_out64(s, arg);
+}
+
+
 /**
  * Generate an immediate-to-register MOV.
  */
-static void tcg_out_movi(TCGContext *s, TCGType type,
-                         TCGReg t0, tcg_target_long arg)
+static void tcg_out_movi(TCGContext *s, TCGType type, TCGReg t0, tcg_target_long arg)
 {
-    uint32_t arg32 = arg;
-    if (type == TCG_TYPE_I32 || arg == arg32) {
-        // Emit the mov and its immediate.
-        tcg_out_unary_gadget(s, gadget_movi_i32, t0);
-        //tcg_out32(s, arg);
-        tcg_out64(s, arg);
+    if (type == TCG_TYPE_I32) {
+        tcg_out_movi_i32(s, t0, arg);
     } else {
-        // Emit the mov and its immediate.
-        tcg_out_unary_gadget(s, gadget_movi_i64, t0);
-        tcg_out64(s, arg);
+        tcg_out_movi_i64(s, t0, arg);
     }
 }
 
@@ -414,7 +512,6 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
         tcg_out_ldst_gadget(s, gadget_ld_i64, ret, arg1, arg2); 
     }
 }
-
 
 
 /**
@@ -965,6 +1062,7 @@ void tcg_out_op(TCGContext *s, TCGOpcode opc, const TCGArg *args, const int *con
             [TCG_MO_LD_ST | TCG_MO_LD_LD] = gadget_mb_ld,
         };
         tcg_out_nullary_gadget(s, sync[args[0] & TCG_MO_ALL]);
+
         break;
     }
 
@@ -983,13 +1081,9 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
                        intptr_t arg2)
 {
     if (type == TCG_TYPE_I32) {
-        tcg_out_binary_gadget(s, gadget_st_i32, arg, arg1);
-        //tcg_out32(s, arg2);
-        tcg_out64(s, arg2);
+        tcg_out_ldst_gadget(s, gadget_st_i32, arg, arg1, arg2); 
     } else {
-        tcg_out_binary_gadget(s, gadget_st_i64, arg, arg1);
-        //tcg_out32(s, arg2);
-        tcg_out64(s, arg2);
+        tcg_out_ldst_gadget(s, gadget_st_i64, arg, arg1, arg2); 
     }
 }
 

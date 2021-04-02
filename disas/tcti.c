@@ -30,7 +30,7 @@
 int print_insn_tcti(bfd_vma addr, disassemble_info *info)
 {
     Dl_info symbol_info = {};
-    char symbol_name[33];
+    char symbol_name[48] ;
 
     int status;
     uint64_t block;
@@ -46,7 +46,7 @@ int print_insn_tcti(bfd_vma addr, disassemble_info *info)
     dladdr((void *)block, &symbol_info);
 
     if(symbol_info.dli_sname != 0) {
-        strlcpy(symbol_name, symbol_info.dli_sname, 32);
+        strlcpy(symbol_name, symbol_info.dli_sname, 47);
         info->fprintf_func(info->stream, "%s (%016llx)", symbol_name, block);
     } else {
         info->fprintf_func(info->stream, "%016llx", block);

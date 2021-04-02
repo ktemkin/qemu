@@ -15,14 +15,6 @@ EPILOGUE = (
     "br x27"
 )
 
-# Instrumented version of our epilogue; for debug.
-#EPILOGUE = (
-#    # Load our next gadget address from our bytecode stream, advancing it.
-#    "ldr x27, [x28], #8",
-#    "b _tcti_pre_instrumentation"
-#)
-
-
 # The number of general-purpose registers we're affording the TCG. This must match
 # the configuration in the TCTI target.
 TCG_REGISTER_COUNT   = 16
@@ -59,17 +51,31 @@ def simple(name, *lines):
     print("}\n")
 
 
-def with_register_substitutions(name, substitutions, lines):
+def with_register_substitutions(name, substitutions, *lines, immediate_range=range(0)):
     """ Generates a collection of gadgtes with register substitutions. """
 
     def substitutions_for_letter(letter, number, line):
         """ Helper that transforms Wd => w1, implementing gadget substitutions. """
+
+        # Register substitutions...
         line = line.replace(f"X{letter}", f"x{number}")
         line = line.replace(f"W{letter}", f"w{number}")
+
+        # ... immediate substitutions.
+        line = line.replace(f"I{letter}", f"{number}")
         return line
+
         
+    # Build a list of all the various stages we'll iterate over...
+    immediate_parameters = list(immediate_range)
+    parameters   = ([TCG_REGISTER_NUMBERS] * len(substitutions))
+
+    # ... adding immediates, if need be.
+    if immediate_parameters:
+        parameters.append(immediate_parameters)
+        substitutions = substitutions + ['i']
+
     # Generate a list of register-combinations we'll support.
-    parameters   = [TCG_REGISTER_NUMBERS] * len(substitutions)
     permutations = itertools.product(*parameters)
 
     #  For each permutation...
@@ -78,7 +84,6 @@ def with_register_substitutions(name, substitutions, lines):
 
         # Replace each placeholder element with its proper value...
         for index, element in enumerate(permutation):
-
             letter = substitutions[index]
             number = element
 
@@ -86,13 +91,13 @@ def with_register_substitutions(name, substitutions, lines):
             new_lines = [substitutions_for_letter(letter, number, line) for line in new_lines]
 
         # ... and emit the gadget.
-        permutation_id = "_r".join(str(number) for number in permutation)
-        simple(f"{name}_r{permutation_id}", *new_lines)
+        permutation_id = "_arg".join(str(number) for number in permutation)
+        simple(f"{name}_arg{permutation_id}", *new_lines)
 
 
 def with_dnm(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xd, Xn, and Xm, and equivalents. """
-    with_register_substitutions(name, ("d", "n", "m"), lines)
+    with_register_substitutions(name, ("d", "n", "m"), *lines)
 
     # Print out an array that contains all of our gadgets, for lookup.
     print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="")
@@ -108,16 +113,41 @@ def with_dnm(name, *lines):
 
             # M array
             for m in TCG_REGISTER_NUMBERS:
-                print(f"gadget_{name}_r{d}_r{n}_r{m}", end=", ")
+                print(f"gadget_{name}_arg{d}_arg{n}_arg{m}", end=", ")
 
             print("},")
         print("\t},")
     print("};")
 
 
-def with_pair(name, substitutions, lines):
+def with_dn_immediate(name, *lines, immediate_range):
+    """ Generates a collection of gadgets with substitutions for Xd, Xn, and Xm, and equivalents. """
+    with_register_substitutions(name, ["d", "n"], *lines, immediate_range=immediate_range)
+
+    # Print out an array that contains all of our gadgets, for lookup.
+    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}][{len(immediate_range)}] = ", end="")
+    print("{")
+
+    # D array
+    for d in TCG_REGISTER_NUMBERS:
+        print("\t{")
+
+        # N array
+        for n in TCG_REGISTER_NUMBERS:
+            print("\t\t{", end="")
+
+            # M array
+            for i in immediate_range:
+                print(f"gadget_{name}_arg{d}_arg{n}_arg{i}", end=", ")
+
+            print("},")
+        print("\t},")
+    print("};")
+
+
+def with_pair(name, substitutions, *lines):
     """ Generates a collection of gadgets with two subtstitutions."""
-    with_register_substitutions(name, substitutions, lines)
+    with_register_substitutions(name, substitutions, *lines)
 
     # Print out an array that contains all of our gadgets, for lookup.
     print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{TCG_REGISTER_COUNT}] = ", end="")
@@ -129,7 +159,7 @@ def with_pair(name, substitutions, lines):
 
         # M array
         for b in TCG_REGISTER_NUMBERS:
-            print(f"gadget_{name}_r{a}_r{b}", end=", ")
+            print(f"gadget_{name}_arg{a}_arg{b}", end=", ")
 
         print("},")
     print("};")
@@ -148,39 +178,77 @@ def math_dn(name, mnemonic):
 
 def with_nm(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xn, and Xm, and equivalents. """
-    with_pair(name, ('n', 'm',), lines)
+    with_pair(name, ('n', 'm',), *lines)
 
 
 def with_dn(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xd, and Xn, and equivalents. """
-    with_pair(name, ('d', 'n',), lines)
+    with_pair(name, ('d', 'n',), *lines)
 
 
-def immediate32_dn(name, *lines):
+def ldst_dn(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xd, and Xn, and equivalents. 
     
-    This variant automatically loads a 32b immediate into x27.
+    This variant is optimized for loads and stores, and optimizes common offset cases.
     """
+
+    #
+    # Simple case: create our gadgets.
+    #
     with_dn(name, "ldr x27, [x28], #8", *lines) # FIXME: encode as 4B, not 8B
 
+    #
+    # Optimization case: create variants of our gadgets with our offsets replaced with common immediates.
+    #
+    immediate_lines_pos = [line.replace("x27", "#Ii") for line in lines]
+    with_dn_immediate(f"{name}_imm", *immediate_lines_pos, immediate_range=range(64))
 
-def with_single(name, substitution, lines):
+    immediate_lines_aligned = [line.replace("x27", "#(Ii << 3)") for line in lines]
+    with_dn_immediate(f"{name}_sh8_imm", *immediate_lines_aligned, immediate_range=range(64))
+
+    immediate_lines_neg = [line.replace("x27", "#-Ii") for line in lines]
+    with_dn_immediate(f"{name}_neg_imm", *immediate_lines_neg, immediate_range=range(64))
+
+
+
+def with_single(name, substitution, *lines):
     """ Generates a collection of gadgets with two subtstitutions."""
-    with_register_substitutions(name, (substitution,), lines)
+    with_register_substitutions(name, (substitution,), *lines)
 
     # Print out an array that contains all of our gadgets, for lookup.
     print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}] = ", end="")
     print("{")
 
     for n in TCG_REGISTER_NUMBERS:
-        print(f"gadget_{name}_r{n}", end=", ")
+        print(f"gadget_{name}_arg{n}", end=", ")
 
     print("};")
 
 
+def with_d_immediate(name, *lines, immediate_range=range(0)):
+    """ Generates a collection of gadgets with two subtstitutions."""
+    with_register_substitutions(name, ['d'], *lines, immediate_range=immediate_range)
+
+    # Print out an array that contains all of our gadgets, for lookup.
+    print(f"void* gadget_{name}[{TCG_REGISTER_COUNT}][{len(immediate_range)}] = ", end="")
+    print("{")
+
+    # D array
+    for a in TCG_REGISTER_NUMBERS:
+        print("\t\t{", end="")
+
+        # I array
+        for b in immediate_range:
+            print(f"gadget_{name}_arg{a}_arg{b}", end=", ")
+
+        print("},")
+    print("};")
+
+
+
 def with_d(name, *lines):
     """ Generates a collection of gadgets with substitutions for Xd. """
-    with_single(name, 'd', lines)
+    with_single(name, 'd', *lines)
 
 
 # Assembly code for saving our machine state before entering the C runtime.
@@ -291,7 +359,6 @@ def st_thunk(name, c_function_name):
 # Gadget definitions.
 #
 
-
 print("/* Automatically generated by tcti-gadget-gen.py. Do not edit. */\n")
 
 # Call a C language helper function by address.
@@ -391,20 +458,25 @@ with_dn("mov_i64",     "mov Xd, Xn")
 with_d("movi_i32", "ldr Wd, [x28], #8")   # FIXME: encode as 4, not 8
 with_d("movi_i64", "ldr Xd, [x28], #8")
 
+# Create MOV variants that have common constants built in to the gadget.
+# This optimization helps costly reads from memories for simple operations.
+with_d_immediate("movi_imm_i32", "mov Wd, #Ii", immediate_range=range(64))
+with_d_immediate("movi_imm_i64", "mov Xd, #Ii", immediate_range=range(64))
+
 # LOAD variants.
-immediate32_dn("ld8u",      "ldrb  Wd, [Xn, x27]")
-immediate32_dn("ld8s",      "ldrsb Wd, [Xn, x27]")
-immediate32_dn("ld16u",     "ldrh  Wd, [Xn, x27]")
-immediate32_dn("ld16s",     "ldrsh Wd, [Xn, x27]")
-immediate32_dn("ld32u",     "ldr   Wd, [Xn, x27]")
-immediate32_dn("ld32s_i64", "ldrsw Xd, [Xn, x27]")
-immediate32_dn("ld_i64",    "ldr   Xd, [Xn, x27]")
+ldst_dn("ld8u",      "ldrb  Wd, [Xn, x27]")
+ldst_dn("ld8s",      "ldrsb Wd, [Xn, x27]")
+ldst_dn("ld16u",     "ldrh  Wd, [Xn, x27]")
+ldst_dn("ld16s",     "ldrsh Wd, [Xn, x27]")
+ldst_dn("ld32u",     "ldr   Wd, [Xn, x27]")
+ldst_dn("ld32s_i64", "ldrsw Xd, [Xn, x27]")
+ldst_dn("ld_i64",    "ldr   Xd, [Xn, x27]")
 
 # STORE variants.
-immediate32_dn("st8",         "strb  Wd, [Xn, x27]")
-immediate32_dn("st16",        "strh  Wd, [Xn, x27]")
-immediate32_dn("st_i32",      "str   Wd, [Xn, x27]")
-immediate32_dn("st_i64",      "str   Xd, [Xn, x27]")
+ldst_dn("st8",         "strb  Wd, [Xn, x27]")
+ldst_dn("st16",        "strh  Wd, [Xn, x27]")
+ldst_dn("st_i32",      "str   Wd, [Xn, x27]")
+ldst_dn("st_i64",      "str   Xd, [Xn, x27]")
 
 # QEMU LD/ST are handled in our C runtime rather than with simple gadgets,
 # as they're nontrivial.

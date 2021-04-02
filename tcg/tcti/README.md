@@ -6,6 +6,15 @@ Execution occurs by jumping into the first gadget, and letting it just play back
 
 Since TCG-TCI is optimized for sets of 14 GP registers and aarch64 has 30, we could easily keep JIT/QEMU and guest state separate, and since 14\*14 is reasonably small we could actually have a set of reasonable gadgets for each combination of operands.
 
+## Optimization suggestions:
+
+- Immediate instruction optimizations:
+    - [ ] Create simple MOVI gadgets for common constants.
+    - [ ] Create simple LD/ST gadget for common offsets constants.
+- Branch prediction workarounds:
+    - [ ] Create multiple BRCOND gadgets, and select between them to help precition.
+
+
 ## Register Convention
 
 | Regs    | Use                   |
