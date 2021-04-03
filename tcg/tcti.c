@@ -24,6 +24,9 @@
 #include "tcg/tcg-op.h"
 #include "qemu/compiler.h"
 
+// Store the current return address during helper calls.
+__thread uintptr_t tcti_call_return_address;
+
 // DEBUG ONLY
 #include <dlfcn.h>
 
@@ -115,7 +118,8 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
     long tcg_temps[CPU_TEMP_BUF_NLONGS];
 
     uint64_t return_value = 0;
-    uintptr_t sp_value = (uintptr_t)(tcg_temps + CPU_TEMP_BUF_NLONGS);
+    uintptr_t sp_value    = (uintptr_t)(tcg_temps + CPU_TEMP_BUF_NLONGS);
+    uintptr_t pc_mirror   = (uintptr_t)&tcti_call_return_address;
 
     // Ensure our target configuration hasn't changed.
     tcti_assert(TCG_AREG0 == TCG_REG_R14);
@@ -129,6 +133,7 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         //   - Point x28 (our bytecode "instruction pointer") to the relevant stream address.
         "ldr x14, %[areg0]\n"
         "ldr x15, %[sp_value]\n"
+        "ldr x25, %[pc_mirror]\n"
         "ldr x28, %[start_tb_ptr]\n"
 
         // To start our code, we'll -call- the gadget at the first bytecode pointer.
@@ -144,14 +149,15 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
 
         : [areg0]        "m"  (env), 
           [sp_value]     "m"  (sp_value), 
-          [start_tb_ptr] "m"  (v_tb_ptr)
+          [start_tb_ptr] "m"  (v_tb_ptr),
+          [pc_mirror]    "m"  (pc_mirror)
 
         // We touch _every_ one of the lower registers, as we use these to execute directly.
         : "x0", "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
 
         // We also use x26/x27 for temporary values, and x28 as our bytecode poitner.
-          "x26", "x27", "x28", "cc", "memory"
+        "x25", "x26", "x27", "x28", "cc", "memory"
     );
 
     return return_value;

@@ -543,6 +543,9 @@ void tb_set_jmp_target(TranslationBlock *tb, int n, uintptr_t addr);
 #ifdef CONFIG_TCG_INTERPRETER
 extern __thread uintptr_t tci_tb_ptr;
 # define GETPC() tci_tb_ptr
+#elif CONFIG_TCG_THREADED_INTERPRETER
+extern __thread uintptr_t tcti_call_return_address;
+# define GETPC() tcti_call_return_address
 #else
 /* Note that this is correct for TCTI also; whose gadget behaves like native code. */
 # define GETPC() \
