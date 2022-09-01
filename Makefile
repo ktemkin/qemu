@@ -204,7 +204,7 @@ clean: recurse-clean
 	rm -f TAGS cscope.* *.pod *~ */*~
 	rm -f fsdev/*.pod scsi/*.pod
 
-VERSION = $(shell cat $(SRC_PATH)/VERSION)
+VERSION = $(shell cat $(SRC_PATH)/VERSION.cfg)
 
 dist: qemu-$(VERSION).tar.bz2
 
