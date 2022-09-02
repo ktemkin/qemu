@@ -233,6 +233,8 @@ if not get_option('hax').disabled()
   endif
 endif
 
+tcti_gadgets = files()
+
 tcg_arch = config_host['ARCH']
 if not get_option('tcg').disabled()
   if cpu not in supported_cpus
