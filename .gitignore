@@ -13,3 +13,9 @@ GTAGS
 *~
 *.ast_raw
 *.depend_raw
+build
+build_mac
+build_tcti
+build_jit
+qemu_tcti
+qemu_jit

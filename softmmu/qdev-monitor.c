@@ -41,6 +41,7 @@
 #include "qemu/cutils.h"
 #include "hw/qdev-properties.h"
 #include "hw/clock.h"
+#include "fsdev/qemu-fsdev.h"
 
 /*
  * Aliases were a bad idea from the start.  Let's keep them
@@ -915,6 +916,37 @@ void hmp_device_add(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, err);
 }
 
+
+void hmp_fsdev_add(Monitor *mon, const QDict *qdict)
+{
+    QemuOpts *opts;
+    Error *err = NULL;
+
+    opts = qemu_opts_from_qdict(qemu_find_opts("device"), qdict, &err);
+    if (!opts) {
+        exit(-1);
+        return;
+    }
+    if (!monitor_cur_is_qmp() && qdev_device_help(opts)) {
+        qemu_opts_del(opts);
+        return;
+    }
+    qemu_fsdev_add(opts, &err);
+
+    /*
+     * Drain all pending RCU callbacks. This is done because
+     * some bus related operations can delay a device removal
+     * (in this case this can happen if device is added and then
+     * removed due to a configuration error)
+     * to a RCU callback, but user might expect that this interface
+     * will finish its job completely once qmp command returns result
+     * to the user
+     */
+    drain_call_rcu();
+    hmp_handle_error(mon, err);
+}
+
+
 void hmp_device_del(Monitor *mon, const QDict *qdict)
 {
     const char *id = qdict_get_str(qdict, "id");
@@ -945,6 +977,20 @@ QemuOptsList qemu_device_opts = {
     .name = "device",
     .implied_opt_name = "driver",
     .head = QTAILQ_HEAD_INITIALIZER(qemu_device_opts.head),
+    .desc = {
+        /*
+         * no elements => accept any
+         * sanity checking will happen later
+         * when setting device properties
+         */
+        { /* end of list */ }
+    },
+};
+
+QemuOptsList qemu_fsdev_opts = {
+    .name = "fsdev",
+    .implied_opt_name = "fsdriver",
+    .head = QTAILQ_HEAD_INITIALIZER(qemu_fsdev_opts.head),
     .desc = {
         /*
          * no elements => accept any

@@ -694,4 +694,11 @@ static inline int platform_does_not_support_system(const char *command)
 }
 #endif /* !HAVE_SYSTEM_FUNCTION */
 
+
+#ifdef CONFIG_DARWIN
+int pthread_fchdir_np(int fd) __attribute__((weak_import));
+#endif
+ 
+int qemu_mknodat(int dirfd, const char *filename, mode_t mode, dev_t dev);
+
 #endif

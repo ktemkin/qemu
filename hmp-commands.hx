@@ -662,6 +662,19 @@ SRST
 ERST
 
     {
+        .name       = "fsdev_add",
+        .args_type  = "device:O",
+        .params     = "[local|proxy|synth][,prop=value][,...]",
+        .help       = "add fsdev, like -fsdev on the command line",
+        .cmd        = hmp_fsdev_add,
+        .command_completion = device_add_completion,
+    },
+
+SRST
+``device_add`` *config*
+  Add device.
+ERST
+    {
         .name       = "device_add",
         .args_type  = "device:O",
         .params     = "driver[,prop=value][,...]",

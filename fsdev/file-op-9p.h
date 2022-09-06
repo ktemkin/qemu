@@ -16,7 +16,12 @@
 
 #include <dirent.h>
 #include <utime.h>
+#if defined(__APPLE__)
+#include <sys/mount.h>
+#include <sys/param.h>
+#else
 #include <sys/vfs.h>
+#endif
 #include "qemu-fsdev-throttle.h"
 
 #define SM_LOCAL_MODE_BITS    0600

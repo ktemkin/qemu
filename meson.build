@@ -1151,20 +1151,13 @@ have_host_block_device = (targetos != 'darwin' or (cc.has_header('IOKit/storage/
 # config-host.h #
 #################
 
-have_virtfs = (targetos == 'linux' and
-    have_system and
-    libattr.found() and
-    libcap_ng.found())
+have_virtfs = have_system
 
 have_virtfs_proxy_helper = have_virtfs and have_tools
 
 if get_option('virtfs').enabled()
   if not have_virtfs
-    if targetos != 'linux'
-      error('virtio-9p (virtfs) requires Linux')
-    elif not libcap_ng.found() or not libattr.found()
-      error('virtio-9p (virtfs) requires libcap-ng-devel and libattr-devel')
-    elif not have_system
+    if not have_system
       error('virtio-9p (virtfs) needs system emulation support')
     endif
   endif
