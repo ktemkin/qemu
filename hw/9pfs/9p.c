@@ -1450,7 +1450,8 @@ static void coroutine_fn v9fs_attach(void *opaque)
      * disable migration if we haven't done already.
      * attach could get called multiple times for the same export.
      */
-    if (!s->migration_blocker) {
+    /*
+    if (false && !s->migration_blocker) {
         error_setg(&s->migration_blocker,
                    "Migration is disabled when VirtFS export path '%s' is mounted in the guest using mount_tag '%s'",
                    s->ctx.fs_root ? s->ctx.fs_root : "NULL", s->tag);
@@ -1463,6 +1464,7 @@ static void coroutine_fn v9fs_attach(void *opaque)
         }
         s->root_fid = fid;
     }
+    */
 
     err = pdu_marshal(pdu, offset, "Q", &qid);
     if (err < 0) {
@@ -4048,14 +4050,20 @@ void pdu_submit(V9fsPDU *pdu, P9MsgHeader *hdr)
     pdu->id = hdr->id;
     pdu->tag = le16_to_cpu(hdr->tag_le);
 
+    fprintf(stderr, "pdu_submit id: %d tag: %d\r\n", pdu->id, pdu->tag);
+
     if (pdu->id >= ARRAY_SIZE(pdu_co_handlers) ||
         (pdu_co_handlers[pdu->id] == NULL)) {
         handler = v9fs_op_not_supp;
+        fprintf(stderr, "pdu_submit op_not_supp");
     } else if (is_ro_export(&s->ctx) && !is_read_only_op(pdu)) {
         handler = v9fs_fs_ro;
+        fprintf(stderr, "pdu_submit fs_ro");
     } else {
         handler = pdu_co_handlers[pdu->id];
+        fprintf(stderr, "pdu_submit: calling handler!");
     }
+
 
     qemu_co_queue_init(&pdu->complete);
     co = qemu_coroutine_create(handler, pdu);

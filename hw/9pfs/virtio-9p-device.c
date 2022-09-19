@@ -22,6 +22,9 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "sysemu/qtest.h"
+#include "migration/qemu-file-types.h"
+
+#include <stdio.h>
 
 static void virtio_9p_push_and_notify(V9fsPDU *pdu)
 {
@@ -195,6 +198,52 @@ static const V9fsTransport virtio_9p_transport = {
     .push_and_notify = virtio_9p_push_and_notify,
 };
 
+static void virtio_9p_save_device(VirtIODevice *vdev, QEMUFile *f)
+{
+    V9fsVirtioState *v = VIRTIO_9P(vdev);
+
+    // Save our virtio queue index...
+    qemu_put_be32(f, virtio_get_queue_index(v->vq));
+
+    // ... and everything that's in the virtio queue.
+    for (unsigned i = 0; i < MAX_REQ; ++i) {
+
+        // If we have a NULL element, encode it as ABSENT (0).
+        if (v->elems[i] == NULL) {
+            qemu_put_be32(f, 0);
+        } 
+
+        // Otherwise, provide PRESENT (1) and then the element itself.
+        else {
+            qemu_put_be32(f, 1);
+            qemu_put_virtqueue_element(vdev, f, v->elems[i]);
+        }
+    }
+
+}
+
+static int virtio_9p_load_device(VirtIODevice *vdev, QEMUFile *f,
+                                  int version_id)
+{
+    V9fsVirtioState *v = VIRTIO_9P(vdev);
+
+    // Read our virtual queue index...
+    unsigned vq_idx = qemu_get_be32(f);
+    v->vq = virtio_get_queue(vdev, vq_idx);
+
+    // ... and everything that's in the virtio queue.
+    for (unsigned i = 0; i < MAX_REQ; ++i) {
+
+        // If we have a queue element, restore it.
+        unsigned present = qemu_get_be32(f);
+        if (present) {
+            v->elems[i] = qemu_get_virtqueue_element(vdev, f, sizeof(VirtQueueElement));
+        }
+    }
+
+    return 0;
+}
+
 static void virtio_9p_device_realize(DeviceState *dev, Error **errp)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
@@ -257,6 +306,8 @@ static void virtio_9p_class_init(ObjectClass *klass, void *data)
     vdc->get_features = virtio_9p_get_features;
     vdc->get_config = virtio_9p_get_config;
     vdc->reset = virtio_9p_reset;
+    vdc->save = virtio_9p_save_device;
+    vdc->load = virtio_9p_load_device;
 }
 
 static const TypeInfo virtio_device_info = {

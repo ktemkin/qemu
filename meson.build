@@ -1153,7 +1153,7 @@ have_host_block_device = (targetos != 'darwin' or (cc.has_header('IOKit/storage/
 
 have_virtfs = have_system
 
-have_virtfs_proxy_helper = have_virtfs and have_tools
+have_virtfs_proxy_helper = false # have_virtfs and have_tools
 
 if get_option('virtfs').enabled()
   if not have_virtfs

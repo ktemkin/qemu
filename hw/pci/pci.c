@@ -540,6 +540,7 @@ static int get_pci_config_device(QEMUFile *f, void *pv, size_t size,
 
     qemu_get_buffer(f, config, size);
     for (i = 0; i < size; ++i) {
+        /*
         if ((config[i] ^ s->config[i]) &
             s->cmask[i] & ~s->wmask[i] & ~s->w1cmask[i]) {
             error_report("%s: Bad config data: i=0x%x read: %x device: %x "
@@ -549,6 +550,7 @@ static int get_pci_config_device(QEMUFile *f, void *pv, size_t size,
             g_free(config);
             return -EINVAL;
         }
+        */
     }
     memcpy(s->config, config, size);
 
